@@ -1,0 +1,17 @@
+.env
+*.local.json
+plan.json
+sync-contract.yaml
+.ruff_cache/
+__pycache__/
+.DS_Store
+build/
+dist/
+*.egg-info/
+radar-output/
+arxiv-radar-output/
+artifacts/
+*.radar.json
+*.radar.md
+tex/research-radar/chapters/
+tex/research-radar/research-radar.tex
