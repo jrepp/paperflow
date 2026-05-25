@@ -1,0 +1,38 @@
+output_dir: arxiv-radar-output
+storage_root: /storage/emulated/0/Books
+lookback_days: 7
+recent_limit: 8
+cited_limit: 8
+citation_candidate_limit: 24
+export:
+  section: all
+  categories:
+    - AI
+    - Data
+  exclude_categories: []
+  top:
+  min_citations: 10
+  max_citations:
+  since:
+  lookback_days: 28
+report:
+  model: openai/gpt-5.5
+  variant:
+  title: AI and Data Research Radar Summary
+  max_papers:
+  summary_cache_dir: artifacts/summary-cache
+  markdown_cache_dir: artifacts/markdown-cache
+  output_tex: artifacts/arxiv-radar-summary.tex
+  output_pdf: artifacts/arxiv-radar-summary.pdf
+  build_dir: artifacts/report-build
+  prompt_version: 3
+reference_depth: 0
+max_references_per_paper: 10
+min_reference_citations: 50
+categories:
+  AI:
+    query: cat:cs.AI OR cat:cs.LG OR cat:cs.CL
+    target_path: AI/Research radar
+  Data:
+    query: cat:cs.DB OR cat:cs.IR OR cat:cs.DC OR cat:stat.AP
+    target_path: Data/Research radar
