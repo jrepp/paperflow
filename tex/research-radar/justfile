@@ -1,0 +1,18 @@
+default:
+	@just --list
+
+# Build PDF (requires pdflatex + shared class files)
+build:
+	TEXINPUTS=.:../shared//: pdflatex -interaction=nonstopmode research-radar.tex > /dev/null 2>&1 || true
+	TEXINPUTS=.:../shared//: pdflatex -interaction=nonstopmode research-radar.tex > /dev/null 2>&1 || true
+	TEXINPUTS=.:../shared//: pdflatex -interaction=nonstopmode research-radar.tex
+	mkdir -p ../dist
+	cp -f research-radar.pdf ../dist/research-radar.pdf
+
+# Single pass compile
+quick:
+	TEXINPUTS=.:../shared//: pdflatex -interaction=nonstopmode research-radar.tex
+
+clean:
+	rm -f *.aux *.log *.out *.toc *.synctex.gz *.fls *.fdb_latexmk
+	rm -f chapters/*.aux
