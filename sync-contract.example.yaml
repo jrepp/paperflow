@@ -1,0 +1,27 @@
+sync_contract:
+  kind: library_sync_contract
+  version: 1
+  storage_root: /storage/emulated/0/Books
+  scan_dirs:
+    - /storage/emulated/0/Books
+    - /storage/emulated/0/Download
+  categories:
+    AI:
+      physical_targets:
+        - /storage/emulated/0/Books/AI/example-research-paper.pdf
+        - /storage/emulated/0/Books/AI/example-agent-notes.pdf
+      shelf_targets:
+        - /storage/emulated/0/Books/AI/example-research-paper.pdf
+        - /storage/emulated/0/Books/AI/example-agent-notes.pdf
+    Manuals:
+      physical_targets:
+        - /storage/emulated/0/Books/Manuals/example-platform-guide.pdf
+    Projects:
+      physical_targets:
+        - /storage/emulated/0/Books/Projects/example-project-plan.pdf
+      shelf_targets:
+        - /storage/emulated/0/Books/Projects/example-project-plan.pdf
+        - /storage/emulated/0/note/example-note-export.pdf
+    Personal:
+      physical_targets:
+        - /storage/emulated/0/Books/Personal/example-record.pdf
