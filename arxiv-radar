@@ -1,0 +1,17 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "pymupdf4llm>=1.27.2.2",
+#   "pyyaml>=6.0.3",
+#   "textual>=8.2.3",
+#   "typer>=0.24.1",
+#   "websockets>=16.0",
+# ]
+# ///
+
+from arxiv_radar_cli import main
+
+
+if __name__ == "__main__":
+    main()
