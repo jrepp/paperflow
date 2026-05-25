@@ -28,6 +28,7 @@ from booxdrop_cli import (
     load_radar_config,
     prime_cache,
     run_arxiv_ingest,
+    run_huggingface_papers_radar,
     run_radar_tui,
     run_radar_workflow,
     run_research_radar,
@@ -249,6 +250,52 @@ def generate_command(
     spec = load_radar_config(config)
     resolved_output_dir = output_dir or spec.output_dir
     raise typer.Exit(asyncio.run(run_research_radar(config, resolved_output_dir)))
+
+
+@app.command("hf-papers")
+def huggingface_papers_command(
+    date: str | None = typer.Option(
+        None,
+        help="Hugging Face daily papers date in YYYY-MM-DD format; defaults to latest",
+    ),
+    output_dir: str = typer.Option(
+        "hf-papers-output",
+        help="Output directory for Hugging Face papers radar artifacts",
+    ),
+    storage_root: str = typer.Option(
+        "/storage/emulated/0/Books",
+        help="Storage root used to build suggested target paths",
+    ),
+    category_name: str = typer.Option(
+        "AI",
+        help="Report category name used by export filters",
+    ),
+    target_path: str = typer.Option(
+        "AI/Hugging Face Papers",
+        help="Target path under the storage root for selected papers",
+    ),
+    limit: int | None = typer.Option(
+        None,
+        help="Optional maximum number of papers to keep after ranking by HF upvotes",
+    ),
+    min_upvotes: int | None = typer.Option(
+        None,
+        help="Optional minimum Hugging Face upvote filter",
+    ),
+) -> None:
+    raise typer.Exit(
+        asyncio.run(
+            run_huggingface_papers_radar(
+                date=date,
+                output_dir=output_dir,
+                storage_root=storage_root,
+                category_name=category_name,
+                target_path=target_path,
+                limit=limit,
+                min_upvotes=min_upvotes,
+            )
+        )
+    )
 
 
 @app.command("prepare")

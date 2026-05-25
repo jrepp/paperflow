@@ -34,6 +34,8 @@ from xml.etree import ElementTree as ET
 import typer
 import websockets
 import yaml
+import paperflow_radar as radar_core
+from paperflow_sources_huggingface import build_report as build_huggingface_papers_report
 from textual.app import App as TextualApp, ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Footer, Header, ListItem, ListView, Static
@@ -70,9 +72,7 @@ def basename(path: str) -> str:
 
 
 def sanitize_filename(name: str) -> str:
-    name = re.sub(r'[\\/:*?"<>|]+', " ", name)
-    name = re.sub(r"\s+", " ", name).strip().rstrip(".")
-    return name or "untitled"
+    return radar_core.sanitize_filename(name)
 
 
 def load_env_file(env_file: str) -> dict[str, str]:
@@ -322,7 +322,7 @@ class SearchEntry:
     suggested_filename: str
 
 
-def http_get_json(url: str, headers: dict[str, str] | None = None) -> dict:
+def http_get_json(url: str, headers: dict[str, str] | None = None) -> object:
     request = urllib.request.Request(
         url,
         headers={
@@ -860,51 +860,17 @@ def build_radar_category_report(spec: RadarSpec, category: RadarCategorySpec) ->
 
 
 def radar_markdown(report: dict) -> str:
-    lines = [
-        f"# Research Radar ({report['generated_at'][:10]})",
-        "",
-        f"Lookback window: {report['lookback_days']} days",
-        "",
-    ]
-    for category in report["categories"]:
-        lines.append(f"## {category['name']}")
-        lines.append("")
-        lines.append(f"Target path: `{category['target_path']}`")
-        lines.append("")
-        lines.append("### New This Week")
-        lines.append("")
-        if category["recent"]:
-            for item in category["recent"]:
-                lines.append(
-                    f"- `{item['arxiv_id']}` {item['title']} ({item['published'][:10]})"
-                )
-        else:
-            lines.append("- None")
-        lines.append("")
-        lines.append("### Highly Cited")
-        lines.append("")
-        if category["highly_cited"]:
-            for item in category["highly_cited"]:
-                lines.append(
-                    f"- `{item['arxiv_id']}` {item['title']} (citations: {item.get('citation_count', 0)})"
-                )
-        else:
-            lines.append("- None")
-        lines.append("")
-    return "\n".join(lines)
+    return radar_core.radar_markdown(report)
 
 
 def write_radar_outputs(report: dict, output_dir: str) -> tuple[Path, Path]:
-    target_dir = Path(output_dir)
-    target_dir.mkdir(parents=True, exist_ok=True)
-    stamp = report["generated_at"][:10]
-    json_path = target_dir / f"arxiv-radar-{stamp}.json"
-    md_path = target_dir / f"arxiv-radar-{stamp}.md"
-    json_path.write_text(
-        json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
-    md_path.write_text(radar_markdown(report) + "\n", encoding="utf-8")
-    return json_path, md_path
+    return radar_core.write_radar_outputs(report, output_dir, prefix="arxiv-radar")
+
+
+def write_huggingface_papers_radar_outputs(
+    report: dict, output_dir: str
+) -> tuple[Path, Path]:
+    return radar_core.write_radar_outputs(report, output_dir, prefix="hf-papers-radar")
 
 
 def load_radar_report(report_path: str) -> dict:
@@ -912,13 +878,11 @@ def load_radar_report(report_path: str) -> dict:
 
 
 def latest_radar_report_path(output_dir: str) -> Path:
-    base = Path(output_dir)
-    matches = sorted(
-        base.glob("arxiv-radar-*.json"), key=lambda path: path.stat().st_mtime
-    )
-    if not matches:
-        raise ValueError(f"no radar report found in {output_dir}")
-    return matches[-1]
+    return radar_core.latest_report_path(output_dir, prefix="arxiv-radar")
+
+
+def latest_huggingface_papers_report_path(output_dir: str) -> Path:
+    return radar_core.latest_report_path(output_dir, prefix="hf-papers-radar")
 
 
 def default_curated_output_path(report_path: Path) -> Path:
@@ -3103,7 +3067,7 @@ def extract_arxiv_id(raw_value: str) -> str | None:
 
 
 def normalize_arxiv_id(arxiv_id: str) -> str:
-    return re.sub(r"v\d+$", "", arxiv_id, flags=re.IGNORECASE)
+    return radar_core.normalize_arxiv_id(arxiv_id)
 
 
 def load_arxiv_ids(input_path: str | None, ids: list[str]) -> list[str]:
@@ -3960,6 +3924,35 @@ async def run_research_radar(config_path: str, output_dir: str | None = None) ->
         typer.echo(
             f"{category['name']}: new={len(category['recent'])} cited={len(category['highly_cited'])}"
         )
+    return 0
+
+
+async def run_huggingface_papers_radar(
+    *,
+    date: str | None,
+    output_dir: str,
+    storage_root: str,
+    category_name: str,
+    target_path: str,
+    limit: int | None = None,
+    min_upvotes: int | None = None,
+) -> int:
+    info(f"fetching Hugging Face papers for {date or 'latest'}")
+    report = build_huggingface_papers_report(
+        date=date,
+        storage_root=storage_root,
+        category_name=category_name,
+        target_path=target_path,
+        limit=limit,
+        min_upvotes=min_upvotes,
+    )
+    json_path, md_path = write_huggingface_papers_radar_outputs(report, output_dir)
+    success(f"wrote {json_path}")
+    success(f"wrote {md_path}")
+    category = report["categories"][0]
+    typer.echo(
+        f"{category['name']}: papers={len(category['recent'])} min_upvotes={min_upvotes if min_upvotes is not None else 0}"
+    )
     return 0
 
 
