@@ -5,6 +5,7 @@
 This repo exposes two direct CLIs:
 
 - `arxiv-radar`: host-independent research pipeline
+- `arxiv-radar hf-papers`: Hugging Face daily papers radar generator
 - `boox-sync`: one sync target that consumes a generic sync contract
 
 Shared implementation lives in internal Python modules. The primary user-facing interfaces are the two direct CLIs above.
@@ -16,6 +17,8 @@ The repo contains only generic templates. Keep real device values in a local `.e
 - `booxdrop_cli.py`
 - `arxiv_radar_cli.py`
 - `boox_sync_cli.py`
+- `paperflow_radar.py`
+- `paperflow_sources_huggingface.py`
 - `arxiv-radar`
 - `boox-sync`
 - `pyproject.toml`
@@ -57,6 +60,19 @@ After that, use the commands directly:
 ```bash
 arxiv-radar --help
 boox-sync --help
+```
+
+Generate a Hugging Face daily papers radar:
+
+```bash
+arxiv-radar hf-papers --date 2026-05-22
+```
+
+Curate or export that radar by passing the generated JSON explicitly:
+
+```bash
+arxiv-radar tui --radar-json hf-papers-output/hf-papers-radar-2026-05-22.json
+arxiv-radar export --radar-json hf-papers-output/hf-papers-radar-2026-05-22.json --section recent
 ```
 
 ## Environment Inputs

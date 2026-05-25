@@ -3,6 +3,7 @@
 This repo has three primary modes:
 
 - `arxiv-radar`: host-independent research pipeline
+- `arxiv-radar hf-papers`: Hugging Face daily papers radar
 - `boox-sync`: BOOX device synchronization from staged local artifacts
 - `tex/`: research radar periodical publishing pipeline
 
@@ -19,6 +20,15 @@ The intended pipeline is:
 `arxiv-radar` owns steps 1-4.
 
 `boox-sync` owns step 5.
+
+## Module Boundaries
+
+- `paperflow_radar.py` owns source-neutral radar report helpers.
+- `paperflow_sources_*.py` modules own source-specific fetch, parse, and report adaptation.
+- `booxdrop_cli.py` still contains legacy shared workflow implementation and BOOX transport behavior.
+- `arxiv_radar_cli.py` owns CLI composition and should call source modules through workflow helpers.
+
+New radar sources should be added as `paperflow_sources_<source>.py` modules that emit the shared radar report shape.
 
 ## Stable Local Config
 
@@ -41,6 +51,8 @@ Core report/radar workflow:
   Regenerates the radar first, then opens the TUI.
 - `arxiv-radar generate`
   Produces JSON and Markdown radar outputs.
+- `arxiv-radar hf-papers`
+  Produces JSON and Markdown radar outputs from Hugging Face daily papers.
 - `arxiv-radar export`
   Produces a manifest from a radar report using config and CLI filters.
 - `arxiv-radar prepare`
@@ -149,4 +161,5 @@ arxiv-radar deliver --host http://DEVICE_HOST:PORT --apply
 
 - BOOX hosts can sleep or drop off Wi-Fi. `boox-sync` commands should fail gracefully and be safe to retry.
 - `arxiv-radar` should prefer stable local config defaults unless a CLI override is explicitly provided.
+- Hugging Face daily papers reports should be explicit source artifacts that can flow through the same TUI, export, prepare, report, and sync stages.
 - For paper analysis, prefer extracted Markdown over raw PDF attachment behavior.

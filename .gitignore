@@ -10,6 +10,7 @@ dist/
 *.egg-info/
 radar-output/
 arxiv-radar-output/
+hf-papers-output/
 artifacts/
 *.radar.json
 *.radar.md

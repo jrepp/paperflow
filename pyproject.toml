@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "paperflow"
 version = "0.1.0"
-description = "arXiv radar and BOOX sync tooling"
+description = "Research paper radar and BOOX sync tooling"
 requires-python = ">=3.11"
 dependencies = [
   "pymupdf4llm>=1.27.2.2",
@@ -20,4 +20,11 @@ arxiv-radar = "arxiv_radar_cli:main"
 boox-sync = "boox_sync_cli:main"
 
 [tool.setuptools]
-py-modules = ["booxdrop_cli", "arxiv_radar_cli", "boox_sync_cli", "radar_db"]
+py-modules = [
+  "arxiv_radar_cli",
+  "boox_sync_cli",
+  "booxdrop_cli",
+  "paperflow_radar",
+  "paperflow_sources_huggingface",
+  "radar_db",
+]

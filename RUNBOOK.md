@@ -89,6 +89,19 @@ Or use a different config:
 arxiv-radar generate --config /path/to/arxiv-radar.yaml
 ```
 
+Generate a radar from Hugging Face daily papers:
+
+```bash
+arxiv-radar hf-papers --date 2026-05-22
+```
+
+Hugging Face papers reports are written to `hf-papers-output/` by default. They use the same report shape as the arXiv radar, so pass the generated JSON to the TUI, export, prepare, report, or sync stages:
+
+```bash
+arxiv-radar tui --radar-json hf-papers-output/hf-papers-radar-2026-05-22.json
+arxiv-radar prepare --radar-json hf-papers-output/hf-papers-radar-2026-05-22.json --section recent
+```
+
 4. Review the generated Markdown summary.
 5. Curate the report interactively.
 
