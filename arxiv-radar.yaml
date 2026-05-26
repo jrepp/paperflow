@@ -4,6 +4,33 @@ lookback_days: 7
 recent_limit: 8
 cited_limit: 8
 citation_candidate_limit: 24
+sources:
+  arxiv:
+    enabled: true
+    strict: true
+  huggingface_papers:
+    enabled: false
+    target_path: AI/Hugging Face Papers
+    min_upvotes:
+  semantic_scholar:
+    enabled: false
+    api_key_env: SEMANTIC_SCHOLAR_API_KEY
+    categories:
+      AI:
+        query: "(machine learning OR language models OR agents)"
+        target_path: AI/Semantic Scholar
+        limit: 50
+  paperswithcode:
+    enabled: false
+    categories:
+      AI:
+        query: "large language model"
+        target_path: AI/Papers with Code
+        limit: 50
+  manual_links:
+    enabled: false
+    input_path: artifacts/manual-paper-links.txt
+    target_path: AI/Manual imports
 export:
   section: all
   categories:
