@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import json
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 
+from paperflow_http import get_json
 from paperflow_radar import (
     normalize_arxiv_id,
     sanitize_filename,
     single_category_report,
     storage_target_path,
 )
+from paperflow_sources import normalize_record_identity
 
 
 HF_DAILY_PAPERS_API_URL = "https://huggingface.co/api/daily_papers"
@@ -40,15 +40,7 @@ class HuggingFacePaperEntry:
 
 
 def _http_get_json(url: str) -> object:
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "paperflow/0.1.0",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
+    return get_json(url)
 
 
 def _author_names(raw_authors: list[dict]) -> list[str]:
@@ -118,8 +110,10 @@ def paper_to_record(
     storage_root: str,
     target_path: str,
 ) -> dict:
+    arxiv_id = normalize_arxiv_id(entry.paper_id)
     record = {
-        "arxiv_id": normalize_arxiv_id(entry.paper_id),
+        "arxiv_id": arxiv_id,
+        "paper_key": f"arxiv:{arxiv_id}" if arxiv_id else "",
         "resolved_id": entry.paper_id,
         "title": entry.title,
         "authors": entry.authors,
@@ -145,10 +139,23 @@ def paper_to_record(
         "organization": entry.organization,
         "ai_summary": entry.ai_summary,
         "ai_keywords": entry.ai_keywords,
+        "source_metadata": {
+            "huggingface_papers": {
+                "paper_url": entry.paper_url,
+                "submitted_at": entry.submitted_at,
+                "upvotes": entry.upvotes,
+                "comments": entry.num_comments,
+                "github_stars": entry.github_stars,
+                "github_repo": entry.github_repo,
+                "project_page": entry.project_page,
+                "organization": entry.organization,
+                "ai_keywords": entry.ai_keywords,
+            }
+        },
     }
     if entry.paper_url:
         record["citation_source_url"] = entry.paper_url
-    return record
+    return normalize_record_identity(record, source="huggingface_papers")
 
 
 def build_report(
