@@ -15,6 +15,12 @@ dependencies = [
   "websockets>=16.0",
 ]
 
+[project.optional-dependencies]
+test = [
+  "pytest>=8.4.2",
+  "testcontainers>=4.13.2",
+]
+
 [project.scripts]
 arxiv-radar = "arxiv_radar_cli:main"
 boox-sync = "boox_sync_cli:main"
