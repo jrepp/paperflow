@@ -53,6 +53,11 @@ report:
   output_pdf: artifacts/arxiv-radar-summary.pdf
   build_dir: artifacts/report-build
   prompt_version: 3
+periodical:
+  series: Research Radar
+  issue:
+  focus:
+  supporting_papers: 6
 reference_depth: 0
 max_references_per_paper: 10
 min_reference_citations: 50

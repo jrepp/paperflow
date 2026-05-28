@@ -18,7 +18,6 @@ from booxdrop_cli import (
     DEFAULT_REPORT_SUMMARY_CACHE_DIR,
     DEFAULT_REPORT_TEX_PATH,
     DEFAULT_STAGED_MANIFEST_PATH,
-    build_periodical,
     build_summary_report,
     export_radar_manifest,
     prepare_manifest,
@@ -35,6 +34,20 @@ from booxdrop_cli import (
     stage_manifest,
     summarize_cache,
     summarize_manifest,
+)
+from paperflow_periodical import (
+    DEFAULT_PERIODICAL_QUEUE_PATH,
+    add_periodical_queue_item,
+    build_periodical,
+    get_periodical_queue_item,
+    load_periodical_queue,
+    propose_periodical_topics,
+)
+from paperflow_publish import (
+    DEFAULT_PUBLISHING_CORPUS_PATH,
+    build_publishing_corpus,
+    load_publishing_corpus,
+    propose_publishing_threads,
 )
 from radar_db import (
     DEFAULT_DB_PATH,
@@ -579,6 +592,30 @@ def periodical_command(
         "tex/research-radar",
         help="Output directory for the periodical TeX project",
     ),
+    queue_item: str | None = typer.Option(
+        None,
+        help="Build from a queued periodical topic id",
+    ),
+    queue_path: str = typer.Option(
+        DEFAULT_PERIODICAL_QUEUE_PATH,
+        help="Periodical topic queue path",
+    ),
+    series: str | None = typer.Option(
+        None,
+        help="Periodical series name",
+    ),
+    issue: int | None = typer.Option(
+        None,
+        help="Numbered issue in the periodical series",
+    ),
+    focus: str | None = typer.Option(
+        None,
+        help="Focal paper arXiv ID or title substring; defaults to highest-citation paper",
+    ),
+    supporting_papers: int | None = typer.Option(
+        None,
+        help="Number of radar papers to use as supporting context around the focus",
+    ),
     reference_depth: int | None = typer.Option(
         None,
         help="Citation traversal depth (0=off, 1=direct refs, 2=refs-of-refs)",
@@ -596,6 +633,12 @@ def periodical_command(
     ),
 ) -> None:
     spec = load_radar_config(config)
+    queued = get_periodical_queue_item(queue_item, queue_path) if queue_item else {}
+    queued_support_ids = [
+        str(paper.get("id") or paper.get("arxiv_id"))
+        for paper in queued.get("supporting_papers", [])
+        if isinstance(paper, dict) and (paper.get("id") or paper.get("arxiv_id"))
+    ]
     result = asyncio.run(
         build_periodical(
             manifest,
@@ -605,9 +648,14 @@ def periodical_command(
             summary_cache_dir=summary_cache_dir or spec.report_summary_cache_dir,
             markdown_cache_dir=markdown_cache_dir or spec.report_markdown_cache_dir,
             prompt_version=spec.report_prompt_version,
-            title=spec.report_title,
+            title=str(queued.get("title") or spec.report_title),
             max_papers=max_papers if max_papers is not None else spec.report_max_papers,
             periodical_dir=periodical_dir,
+            series=series or str(queued.get("series") or spec.periodical_series),
+            issue=issue if issue is not None else queued.get("issue", spec.periodical_issue),
+            focus=focus if focus is not None else queued.get("focus", spec.periodical_focus),
+            supporting_papers=supporting_papers if supporting_papers is not None else len(queued.get("supporting_papers") or []) or spec.periodical_supporting_papers,
+            supporting_focuses=queued_support_ids or None,
             refresh_summaries=refresh_summaries,
             reference_depth=reference_depth if reference_depth is not None else spec.reference_depth,
             max_references_per_paper=max_references_per_paper if max_references_per_paper is not None else spec.max_references_per_paper,
@@ -620,7 +668,135 @@ def periodical_command(
     typer.echo(f"paper_count={result['paper_count']}")
     typer.echo(f"foundational_count={result['foundational_count']}")
     typer.echo(f"chapter_count={result['chapter_count']}")
+    typer.echo(f"series={result['series']}")
+    typer.echo(f"issue={result['issue']}")
+    typer.echo(f"focus={result['focus']}")
     typer.echo(f"model={result['model']}")
+
+
+@app.command("periodical-topics")
+def periodical_topics_command(
+    manifest: str = typer.Option(
+        DEFAULT_MANIFEST_PATH,
+        help=f"Manifest path; defaults to {DEFAULT_MANIFEST_PATH}",
+    ),
+    limit: int = typer.Option(8, help="Number of candidate topics to present"),
+    supporting_papers: int = typer.Option(
+        6, help="Supporting papers to suggest per topic"
+    ),
+) -> None:
+    topics = propose_periodical_topics(
+        manifest,
+        limit=limit,
+        supporting_papers=supporting_papers,
+    )
+    for index, topic in enumerate(topics, start=1):
+        focus_paper = topic["focus_paper"]
+        typer.echo(f"{index}. {topic['id']}")
+        typer.echo(f"   title={topic['title']}")
+        typer.echo(
+            f"   focus={focus_paper['id']} cites={focus_paper['citation_count']} category={focus_paper['category']}"
+        )
+        for paper in topic["supporting_papers"][:supporting_papers]:
+            typer.echo(f"   support={paper['id']} {paper['title']}")
+        typer.echo("")
+
+
+@app.command("publish-corpus")
+def publish_corpus_command(
+    artifacts: list[str] = typer.Argument(
+        ..., help="Radar report or manifest JSON artifacts to ingest"
+    ),
+    output: str = typer.Option(
+        DEFAULT_PUBLISHING_CORPUS_PATH,
+        help="Output path for the merged publishing corpus",
+    ),
+) -> None:
+    corpus = build_publishing_corpus(artifacts, output_path=output)
+    typer.echo(f"output={output}")
+    typer.echo(f"paper_count={corpus['paper_count']}")
+    typer.echo(f"artifact_count={len(corpus['artifact_paths'])}")
+
+
+@app.command("publish-threads")
+def publish_threads_command(
+    corpus: str = typer.Option(
+        DEFAULT_PUBLISHING_CORPUS_PATH,
+        help="Merged publishing corpus path",
+    ),
+    limit: int = typer.Option(10, help="Number of thread candidates to present"),
+    papers_per_thread: int = typer.Option(
+        8, help="Maximum papers to attach to each proposed thread"
+    ),
+) -> None:
+    payload = load_publishing_corpus(corpus)
+    topics = propose_publishing_threads(
+        payload,
+        limit=limit,
+        papers_per_thread=papers_per_thread,
+    )
+    for index, topic in enumerate(topics, start=1):
+        typer.echo(f"{index}. {topic['id']}")
+        typer.echo(f"   title={topic['title']}")
+        typer.echo(
+            f"   focus={topic['focus']} sources={topic['source_count']} papers={topic['paper_count']}"
+        )
+        typer.echo(f"   focus_title={topic['focus_title']}")
+        for paper in topic["supporting_papers"][: max(0, papers_per_thread - 1)]:
+            typer.echo(f"   support={paper['paper_key']} {paper['title']}")
+        typer.echo("")
+
+
+@app.command("periodical-queue-list")
+def periodical_queue_list_command(
+    queue_path: str = typer.Option(
+        DEFAULT_PERIODICAL_QUEUE_PATH,
+        help="Periodical topic queue path",
+    ),
+) -> None:
+    queue = load_periodical_queue(queue_path)
+    topics = queue.get("topics", [])
+    if not topics:
+        typer.echo("queue is empty")
+        return
+    for topic in topics:
+        typer.echo(
+            f"{topic.get('id')} issue={topic.get('issue')} status={topic.get('status')} focus={topic.get('focus')}"
+        )
+        typer.echo(f"   title={topic.get('title')}")
+
+
+@app.command("periodical-queue-add")
+def periodical_queue_add_command(
+    focus: str = typer.Option(
+        ...,
+        help="Focal paper arXiv ID, resolved ID, or title substring",
+    ),
+    manifest: str = typer.Option(
+        DEFAULT_MANIFEST_PATH,
+        help=f"Manifest path; defaults to {DEFAULT_MANIFEST_PATH}",
+    ),
+    queue_path: str = typer.Option(
+        DEFAULT_PERIODICAL_QUEUE_PATH,
+        help="Periodical topic queue path",
+    ),
+    title: str | None = typer.Option(None, help="Editorial topic title"),
+    series: str = typer.Option("Research Radar", help="Periodical series name"),
+    issue: int | None = typer.Option(None, help="Numbered issue"),
+    supporting_papers: int = typer.Option(6, help="Supporting papers to include"),
+) -> None:
+    item = add_periodical_queue_item(
+        manifest_path=manifest,
+        queue_path=queue_path,
+        focus=focus,
+        title=title,
+        series=series,
+        issue=issue,
+        supporting_papers=supporting_papers,
+    )
+    typer.echo(f"queued={item['id']}")
+    typer.echo(f"title={item['title']}")
+    typer.echo(f"focus={item['focus']}")
 
 
 @app.command("deliver")
