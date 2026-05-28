@@ -19,7 +19,7 @@ from booxdrop_cli import (
 
 DEFAULT_DB_PATH = "artifacts/radar.db"
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA_DDL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS schema_version (
 
 CREATE TABLE IF NOT EXISTS papers (
     arxiv_id         TEXT NOT NULL PRIMARY KEY,
+    paper_key        TEXT,
+    doi              TEXT,
+    semantic_scholar_id TEXT,
+    corpus_id        TEXT,
+    openalex_id      TEXT,
+    source_ids_json  TEXT NOT NULL DEFAULT '{}',
+    source_metadata_json TEXT NOT NULL DEFAULT '{}',
     resolved_id      TEXT NOT NULL,
     title            TEXT NOT NULL DEFAULT '',
     authors          TEXT NOT NULL DEFAULT '[]',
@@ -148,6 +155,8 @@ CREATE INDEX IF NOT EXISTS idx_dss_paper  ON device_sync_state(arxiv_id);
 CREATE INDEX IF NOT EXISTS idx_dss_status ON device_sync_state(status);
 CREATE INDEX IF NOT EXISTS idx_ssp_session ON sync_session_papers(session_id);
 CREATE INDEX IF NOT EXISTS idx_cd_status  ON curation_decisions(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_paper_key ON papers(paper_key)
+WHERE paper_key IS NOT NULL AND paper_key != '';
 
 CREATE TABLE IF NOT EXISTS paper_retrievals (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -248,11 +257,47 @@ CREATE INDEX IF NOT EXISTS idx_ref_source  ON reference_edges(source_arxiv_id);
 CREATE INDEX IF NOT EXISTS idx_ref_target  ON reference_edges(target_arxiv_id);
 CREATE INDEX IF NOT EXISTS idx_pb_status   ON periodical_builds(status);
 CREATE INDEX IF NOT EXISTS idx_pbp_build   ON periodical_build_papers(build_id);
+
+CREATE TABLE IF NOT EXISTS source_refreshes (
+    source TEXT NOT NULL,
+    category TEXT NOT NULL,
+    query_hash TEXT NOT NULL,
+    refreshed_at TEXT NOT NULL,
+    since TEXT,
+    cursor TEXT,
+    status TEXT NOT NULL DEFAULT 'completed',
+    item_count INTEGER NOT NULL DEFAULT 0,
+    error_msg TEXT,
+    PRIMARY KEY (source, category, query_hash)
+);
 """
 
 SCHEMA_MIGRATIONS = {
     4: [
         "ALTER TABLE periodical_builds ADD COLUMN manifest_sha256 TEXT NOT NULL DEFAULT ''",
+    ],
+    5: [
+        "ALTER TABLE papers ADD COLUMN paper_key TEXT",
+        "ALTER TABLE papers ADD COLUMN doi TEXT",
+        "ALTER TABLE papers ADD COLUMN semantic_scholar_id TEXT",
+        "ALTER TABLE papers ADD COLUMN corpus_id TEXT",
+        "ALTER TABLE papers ADD COLUMN openalex_id TEXT",
+        "ALTER TABLE papers ADD COLUMN source_ids_json TEXT NOT NULL DEFAULT '{}'",
+        "ALTER TABLE papers ADD COLUMN source_metadata_json TEXT NOT NULL DEFAULT '{}'",
+        "UPDATE papers SET paper_key = 'arxiv:' || arxiv_id WHERE paper_key IS NULL OR paper_key = ''",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_paper_key ON papers(paper_key) WHERE paper_key IS NOT NULL AND paper_key != ''",
+        """CREATE TABLE IF NOT EXISTS source_refreshes (
+            source TEXT NOT NULL,
+            category TEXT NOT NULL,
+            query_hash TEXT NOT NULL,
+            refreshed_at TEXT NOT NULL,
+            since TEXT,
+            cursor TEXT,
+            status TEXT NOT NULL DEFAULT 'completed',
+            item_count INTEGER NOT NULL DEFAULT 0,
+            error_msg TEXT,
+            PRIMARY KEY (source, category, query_hash)
+        )""",
     ],
 }
 
@@ -261,6 +306,13 @@ SCHEMA_MIGRATIONS = {
 class PaperRecord:
     arxiv_id: str
     resolved_id: str
+    paper_key: str = ""
+    doi: str | None = None
+    semantic_scholar_id: str | None = None
+    corpus_id: str | None = None
+    openalex_id: str | None = None
+    source_ids: dict = field(default_factory=dict)
+    source_metadata: dict = field(default_factory=dict)
     title: str = ""
     authors: list[str] = field(default_factory=list)
     summary: str = ""
@@ -303,6 +355,19 @@ class RetrievalRecord:
     source: str = "arxiv_api"
     resolved_id: str = ""
     metadata_json: str | None = None
+
+
+@dataclass
+class SourceRefreshRecord:
+    source: str
+    category: str
+    query_hash: str
+    refreshed_at: str = ""
+    since: str | None = None
+    cursor: str | None = None
+    status: str = "completed"
+    item_count: int = 0
+    error_msg: str | None = None
 
 
 @dataclass
@@ -417,14 +482,28 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> bool:
 
 
 def upsert_paper(conn: sqlite3.Connection, paper: PaperRecord) -> None:
+    paper_key = paper.paper_key or (f"arxiv:{paper.arxiv_id}" if paper.arxiv_id else "")
     conn.execute(
         """INSERT INTO papers (
-            arxiv_id, resolved_id, title, authors, summary,
+            arxiv_id, paper_key, doi, semantic_scholar_id, corpus_id,
+            openalex_id, source_ids_json, source_metadata_json,
+            resolved_id, title, authors, summary,
             pdf_url, abs_url, primary_category, published, updated,
             suggested_filename, citation_count, influential_citation_count,
             citation_source_url, discovered_at, discovered_via
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(arxiv_id) DO UPDATE SET
+            paper_key = COALESCE(NULLIF(excluded.paper_key, ''), papers.paper_key),
+            doi = COALESCE(NULLIF(excluded.doi, ''), papers.doi),
+            semantic_scholar_id = COALESCE(NULLIF(excluded.semantic_scholar_id, ''), papers.semantic_scholar_id),
+            corpus_id = COALESCE(NULLIF(excluded.corpus_id, ''), papers.corpus_id),
+            openalex_id = COALESCE(NULLIF(excluded.openalex_id, ''), papers.openalex_id),
+            source_ids_json = CASE
+                WHEN excluded.source_ids_json = '{}' THEN papers.source_ids_json
+                ELSE excluded.source_ids_json END,
+            source_metadata_json = CASE
+                WHEN excluded.source_metadata_json = '{}' THEN papers.source_metadata_json
+                ELSE excluded.source_metadata_json END,
             resolved_id = COALESCE(NULLIF(excluded.resolved_id, ''), papers.resolved_id),
             title = COALESCE(NULLIF(excluded.title, ''), papers.title),
             authors = CASE
@@ -447,6 +526,13 @@ def upsert_paper(conn: sqlite3.Connection, paper: PaperRecord) -> None:
         """,
         (
             paper.arxiv_id,
+            paper_key,
+            paper.doi,
+            paper.semantic_scholar_id,
+            paper.corpus_id,
+            paper.openalex_id,
+            json.dumps(paper.source_ids),
+            json.dumps(paper.source_metadata),
             paper.resolved_id,
             paper.title,
             json.dumps(paper.authors),
@@ -493,6 +579,50 @@ def latest_retrieval(
            WHERE arxiv_id = ?
            ORDER BY retrieved_at DESC LIMIT 1""",
         (arxiv_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_source_refresh(
+    conn: sqlite3.Connection,
+    refresh: SourceRefreshRecord,
+) -> None:
+    conn.execute(
+        """INSERT INTO source_refreshes
+           (source, category, query_hash, refreshed_at, since, cursor, status, item_count, error_msg)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source, category, query_hash) DO UPDATE SET
+           refreshed_at = excluded.refreshed_at,
+           since = excluded.since,
+           cursor = excluded.cursor,
+           status = excluded.status,
+           item_count = excluded.item_count,
+           error_msg = excluded.error_msg""",
+        (
+            refresh.source,
+            refresh.category,
+            refresh.query_hash,
+            refresh.refreshed_at or _now_iso(),
+            refresh.since,
+            refresh.cursor,
+            refresh.status,
+            refresh.item_count,
+            refresh.error_msg,
+        ),
+    )
+
+
+def get_source_refresh(
+    conn: sqlite3.Connection,
+    *,
+    source: str,
+    category: str,
+    query_hash: str,
+) -> dict | None:
+    row = conn.execute(
+        """SELECT * FROM source_refreshes
+           WHERE source = ? AND category = ? AND query_hash = ?""",
+        (source, category, query_hash),
     ).fetchone()
     return dict(row) if row else None
 
@@ -715,6 +845,13 @@ def entry_to_paper(entry: dict, discovered_via: str = "radar") -> PaperRecord:
     return PaperRecord(
         arxiv_id=entry.get("arxiv_id", ""),
         resolved_id=entry.get("resolved_id", ""),
+        paper_key=entry.get("paper_key", ""),
+        doi=entry.get("doi"),
+        semantic_scholar_id=entry.get("semantic_scholar_id"),
+        corpus_id=str(entry.get("corpus_id")) if entry.get("corpus_id") is not None else None,
+        openalex_id=entry.get("openalex_id"),
+        source_ids=entry.get("source_ids", {}) if isinstance(entry.get("source_ids", {}), dict) else {},
+        source_metadata=entry.get("source_metadata", {}) if isinstance(entry.get("source_metadata", {}), dict) else {},
         title=entry.get("title", ""),
         authors=entry.get("authors", []),
         summary=entry.get("summary", ""),
@@ -1094,6 +1231,7 @@ def db_status(conn: sqlite3.Connection) -> dict:
     devices = conn.execute("SELECT COUNT(*) AS c FROM devices").fetchone()["c"]
     sessions = conn.execute("SELECT COUNT(*) AS c FROM sync_sessions").fetchone()["c"]
     retrievals = conn.execute("SELECT COUNT(*) AS c FROM paper_retrievals").fetchone()["c"]
+    source_refreshes = conn.execute("SELECT COUNT(*) AS c FROM source_refreshes").fetchone()["c"]
     extractions_completed = conn.execute(
         "SELECT COUNT(*) AS c FROM extractions WHERE status = 'completed'"
     ).fetchone()["c"]
@@ -1147,6 +1285,7 @@ def db_status(conn: sqlite3.Connection) -> dict:
         "devices": devices,
         "sync_sessions": sessions,
         "retrievals": retrievals,
+        "source_refreshes": source_refreshes,
         "extractions_completed": extractions_completed,
         "extractions_pending": extractions_pending,
         "extraction_type_counts": extraction_type_counts,
