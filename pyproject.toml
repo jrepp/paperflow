@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
   "pymupdf4llm>=1.27.2.2",
   "pyyaml>=6.0.3",
+  "rich>=13.9.4",
   "textual>=8.2.3",
   "typer>=0.24.1",
   "websockets>=16.0",
@@ -22,6 +23,7 @@ test = [
 ]
 
 [project.scripts]
+paperflow = "paperflow_cli:main"
 arxiv-radar = "arxiv_radar_cli:main"
 boox-sync = "boox_sync_cli:main"
 
@@ -31,9 +33,13 @@ py-modules = [
   "boox_sync_cli",
   "booxdrop_cli",
   "paperflow_http",
+  "paperflow_cli",
+  "paperflow_periodical",
+  "paperflow_publish",
   "paperflow_radar",
   "paperflow_refresh",
   "paperflow_sources",
   "paperflow_sources_huggingface",
+  "paperflow_terminal",
   "radar_db",
 ]

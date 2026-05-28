@@ -16,3 +16,5 @@ artifacts/
 *.radar.md
 tex/research-radar/chapters/
 tex/research-radar/research-radar.tex
+tex/research-radar/build-metadata.json
+artifacts/publishing-corpus.json
