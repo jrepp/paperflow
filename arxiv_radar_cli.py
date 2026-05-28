@@ -72,6 +72,12 @@ from radar_db import (
     finish_periodical_build,
     record_periodical_paper,
 )
+from paperflow_refresh import (
+    DEFAULT_REFRESH_LOCK_PATH,
+    DEFAULT_REFRESH_LOG_DIR,
+    DEFAULT_REFRESH_STATUS_PATH,
+    run_refresh,
+)
 
 
 def _format_filter_summary(
@@ -250,6 +256,69 @@ def generate_command(
     spec = load_radar_config(config)
     resolved_output_dir = output_dir or spec.output_dir
     raise typer.Exit(asyncio.run(run_research_radar(config, resolved_output_dir)))
+
+
+@app.command("refresh")
+def refresh_command(
+    config: str = typer.Option(
+        DEFAULT_RADAR_CONFIG,
+        help="Path to the stable local arXiv radar YAML config",
+    ),
+    output_dir: str | None = typer.Option(
+        None, help="Override the output directory from the config"
+    ),
+    source: list[str] = typer.Option(
+        None, "--source", help="Refresh only this source; repeat for multiple sources"
+    ),
+    skip_source: list[str] = typer.Option(
+        None, "--skip-source", help="Skip this source; repeat for multiple sources"
+    ),
+    offline: bool = typer.Option(
+        False, help="Build refresh outputs from local DB/cache state only"
+    ),
+    update_only: bool = typer.Option(
+        False,
+        help="Cron-safe source refresh only; never opens TUI, syncs, downloads PDFs, or builds reports",
+    ),
+    fail_on_lock: bool = typer.Option(
+        False, help="Exit non-zero when another refresh already owns the lock"
+    ),
+    lock_path: str = typer.Option(
+        DEFAULT_REFRESH_LOCK_PATH, help="Refresh lock file path"
+    ),
+    status_path: str = typer.Option(
+        DEFAULT_REFRESH_STATUS_PATH, help="Structured refresh status JSON path"
+    ),
+    log_dir: str = typer.Option(
+        DEFAULT_REFRESH_LOG_DIR, help="Directory for structured refresh logs"
+    ),
+    db: str = typer.Option(
+        DEFAULT_DB_PATH, help="SQLite database path for refresh state"
+    ),
+) -> None:
+    result = run_refresh(
+        config_path=config,
+        output_dir=output_dir,
+        db_path=db,
+        requested_sources=source or [],
+        skipped_sources=skip_source or [],
+        offline=offline,
+        update_only=update_only,
+        fail_on_lock=fail_on_lock,
+        lock_path=lock_path,
+        status_path=status_path,
+        log_dir=log_dir,
+    )
+    if result.locked:
+        typer.echo(f"refresh locked; status={result.status_path}")
+    else:
+        typer.echo(f"report={result.report_path}")
+        typer.echo(f"status={result.status_path}")
+        for item in result.sources:
+            typer.echo(
+                f"{item.get('source')}: {item.get('status')} count={item.get('item_count', 0)}"
+            )
+    raise typer.Exit(result.exit_code)
 
 
 @app.command("hf-papers")
@@ -878,6 +947,7 @@ def db_status_command(
     typer.echo(f"devices={status['devices']}")
     typer.echo(f"sync_sessions={status['sync_sessions']}")
     typer.echo(f"retrievals={status['retrievals']}")
+    typer.echo(f"source_refreshes={status['source_refreshes']}")
     typer.echo(f"extractions: completed={status['extractions_completed']} pending={status['extractions_pending']}")
     if status["extraction_type_counts"]:
         typer.echo("  extraction breakdown:")
