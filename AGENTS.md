@@ -1,11 +1,21 @@
 # CLI Guide
 
-This repo has three primary modes:
+The preferred project-centric CLI is `paperflow`.
 
-- `arxiv-radar`: host-independent research pipeline
-- `arxiv-radar hf-papers`: Hugging Face daily papers radar
+The legacy command names remain available for compatibility:
+
+- `arxiv-radar`: compatibility wrapper for radar/library/publishing commands
 - `boox-sync`: BOOX device synchronization from staged local artifacts
 - `tex/`: research radar periodical publishing pipeline
+
+The primary `paperflow` command groups are:
+
+- `paperflow radar`: generate, refresh, curate, and export radar reports
+- `paperflow sources`: source-specific ingest commands
+- `paperflow library`: prepare manifests, cache PDFs, stage artifacts, and build summaries
+- `paperflow publish`: build publishing corpora, propose durable threads, manage the editorial queue, and build periodical issues
+- `paperflow device`: BOOX device operations
+- `paperflow project`: inspect and maintain local project state
 
 ## Pipeline
 
@@ -17,9 +27,9 @@ The intended pipeline is:
 4. build a periodical or TeX/PDF radar summary
 5. sync the staged manifest to a target device
 
-`arxiv-radar` owns steps 1-4.
+`paperflow` owns steps 1-4.
 
-`boox-sync` owns step 5.
+`paperflow device` owns step 5. `boox-sync` remains as the compatibility device-only entrypoint.
 
 ## Module Boundaries
 
@@ -41,46 +51,52 @@ New radar sources should be added as `paperflow_sources_<source>.py` modules tha
 
 ## Major Commands
 
-### arxiv-radar
+### paperflow
 
 Core report/radar workflow:
 
-- `arxiv-radar`
-  Opens the TUI on the latest radar report.
-- `arxiv-radar --refresh`
-  Regenerates the radar first, then opens the TUI.
-- `arxiv-radar generate`
+- `paperflow radar generate`
   Produces JSON and Markdown radar outputs.
-- `arxiv-radar hf-papers`
+- `paperflow sources hf-papers`
   Produces JSON and Markdown radar outputs from Hugging Face daily papers.
-- `arxiv-radar export`
+- `paperflow radar export`
   Produces a manifest from a radar report using config and CLI filters.
-- `arxiv-radar prepare`
+- `paperflow library prepare`
   Runs `export -> cache-prime -> stage`. Auto-detects curated manifest.
-- `arxiv-radar report`
+- `paperflow library report`
   Builds the TeX and PDF summary from the current manifest.
-- `arxiv-radar periodical`
-  Builds a research radar periodical with per-paper TeX chapters using `tex/` publishing pipeline.
+- `paperflow publish issue build`
+  Builds a numbered research radar periodical issue from a focal paper plus supporting context using the `tex/` publishing pipeline.
+- `paperflow publish topics`
+  Presents candidate evergreen periodical topics from the current manifest.
+- `paperflow publish queue add`
+  Adds an approved focal topic to the local periodical issue queue.
+- `paperflow publish queue list`
+  Lists queued periodical issues.
+- `paperflow publish corpus`
+  Builds a deduplicated publishing corpus from multiple radar reports and manifests.
+- `paperflow publish threads`
+  Presents cross-corpus thread candidates for future periodical issues.
 - `arxiv-radar deliver`
   Convenience wrapper that runs `prepare` and then calls `boox-sync sync-manifest`.
 
 Inspection/state commands:
 
-- `arxiv-radar manifest-summary --manifest <path>`
-- `arxiv-radar cache-summary --manifest <path>`
-- `arxiv-radar cache-prime --manifest <path>`
-- `arxiv-radar stage --manifest <path>`
+- `paperflow library manifest-summary --manifest <path>`
+- `paperflow library cache-summary --manifest <path>`
+- `paperflow library cache-prime --manifest <path>`
+- `paperflow library stage --manifest <path>`
 
-### boox-sync
+### Device Operations
 
 Device-only commands:
 
-- `boox-sync inventory --host <url>`
-- `boox-sync sync --host <url> --contract <path>`
-- `boox-sync sync-manifest --host <url> --manifest <path>`
-- `boox-sync validate --host <url> --contract <path>`
+- `paperflow device inventory --host <url>`
+- `paperflow device sync --host <url> --contract <path>`
+- `paperflow device sync-manifest --host <url> --manifest <path>`
+- `paperflow device validate --host <url> --contract <path>`
 
-`boox-sync` should not own radar generation, manifest export, cache management, or report generation.
+Device commands should not own radar generation, manifest export, cache management, or report generation.
 
 ## Default Local Artifacts
 
@@ -114,20 +130,45 @@ The report should include:
 - confidence and evidence basis
 - bibliography appendix
 
+## Publishing Pipeline
+
+The publishing pipeline separates corpus discovery from issue production:
+
+1. ingest multiple radar outputs and manifests into a merged publishing corpus
+2. propose durable threads across all available source artifacts
+3. add selected threads or focal papers to the periodical queue
+4. build numbered periodical issues from approved queue items
+
+`publish-corpus` accepts JSON artifacts from arXiv radar, Hugging Face papers radar, curated manifests, and future source-specific radar reports that emit the shared radar report shape. It deduplicates papers through source-neutral identity keys and writes `artifacts/publishing-corpus.json`.
+
+`publish-threads` is the first deterministic topic discovery pass. It is intentionally separate from periodical generation so this layer can later use LLM synthesis over the merged corpus without changing the issue-building contract.
+
 ## Periodical Pipeline
 
-The periodical pipeline (`arxiv-radar periodical`) generates a structured TeX publication under `tex/research-radar/`:
+The periodical pipeline is editorial-first:
 
-- Per-paper chapters with full intake summaries
-- Category-level overview chapters with executive summaries
+1. propose candidate evergreen topics from a radar manifest
+2. choose a focal paper and add it to the numbered issue queue
+3. build the periodical issue from that queued topic
+
+`paperflow publish issue build` generates a structured TeX publication under `tex/research-radar/`:
+
+- Numbered series metadata
+- A focal paper that defines the issue's through line
+- Supporting papers selected from the radar manifest
+- Optional foundational references discovered through citation traversal
+- Full intake summaries for focal and supporting papers
 - Executive summary and bibliography appendices
-- Built with `exec-report.cls` (shared from `tex/shared/`)
+- Built with `research-radar.cls` (shared from `tex/shared/`)
 - Output PDF at `tex/dist/research-radar.pdf`
+- Build metadata at `tex/research-radar/build-metadata.json`
 
 Generated files in `tex/research-radar/chapters/` and the main `research-radar.tex` are git-ignored and regenerated each run.
+The local periodical queue is stored at `artifacts/periodical-queue.json` and is git-ignored with other artifacts.
 
 The `tex/` directory is a self-contained publishing pipeline adapted from the tex monorepo:
-- `tex/shared/exec-report.cls` -- shared LaTeX document class
+- `tex/shared/research-radar.cls` -- shared LaTeX document class for the periodical
+- `tex/shared/exec-report.cls` -- shared LaTeX document class for executive report-style outputs
 - `tex/research-radar/justfile` -- build recipe (pdflatex, 3-pass)
 - `tex/justfile` -- top-level build-all orchestration
 
@@ -136,19 +177,19 @@ The `tex/` directory is a self-contained publishing pipeline adapted from the te
 ### End-to-End Radar To Device
 
 ```bash
-arxiv-radar prepare
-arxiv-radar report
-boox-sync sync-manifest --host http://DEVICE_HOST:PORT --manifest artifacts/arxiv-radar-staged.json --apply
+paperflow library prepare
+paperflow library report
+paperflow device sync-manifest --host http://DEVICE_HOST:PORT --manifest artifacts/arxiv-radar-staged.json --apply
 ```
 
 ### Export + Inspect + Sync
 
 ```bash
-arxiv-radar export
-arxiv-radar manifest-summary --manifest artifacts/arxiv-radar-manifest.json
-arxiv-radar cache-summary --manifest artifacts/arxiv-radar-manifest.json
-arxiv-radar stage --manifest artifacts/arxiv-radar-manifest.json
-boox-sync sync-manifest --host http://DEVICE_HOST:PORT --manifest artifacts/arxiv-radar-staged.json --apply
+paperflow radar export
+paperflow library manifest-summary --manifest artifacts/arxiv-radar-manifest.json
+paperflow library cache-summary --manifest artifacts/arxiv-radar-manifest.json
+paperflow library stage --manifest artifacts/arxiv-radar-manifest.json
+paperflow device sync-manifest --host http://DEVICE_HOST:PORT --manifest artifacts/arxiv-radar-staged.json --apply
 ```
 
 ### One-Step Convenience
@@ -159,7 +200,7 @@ arxiv-radar deliver --host http://DEVICE_HOST:PORT --apply
 
 ## Operational Notes
 
-- BOOX hosts can sleep or drop off Wi-Fi. `boox-sync` commands should fail gracefully and be safe to retry.
-- `arxiv-radar` should prefer stable local config defaults unless a CLI override is explicitly provided.
+- BOOX hosts can sleep or drop off Wi-Fi. `paperflow device` and `boox-sync` commands should fail gracefully and be safe to retry.
+- `paperflow` should prefer stable local config defaults unless a CLI override is explicitly provided.
 - Hugging Face daily papers reports should be explicit source artifacts that can flow through the same TUI, export, prepare, report, and sync stages.
 - For paper analysis, prefer extracted Markdown over raw PDF attachment behavior.

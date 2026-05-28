@@ -302,6 +302,10 @@ class RadarSpec:
     report_output_pdf: str = DEFAULT_REPORT_PDF_PATH
     report_build_dir: str = DEFAULT_REPORT_BUILD_DIR
     report_prompt_version: int = DEFAULT_REPORT_PROMPT_VERSION
+    periodical_series: str = "Research Radar"
+    periodical_issue: int | None = None
+    periodical_focus: str | None = None
+    periodical_supporting_papers: int = 6
     reference_depth: int = 2
     max_references_per_paper: int = 10
     min_reference_citations: int = 50
@@ -650,6 +654,9 @@ def load_radar_config(config_path: str) -> RadarSpec:
     report_raw = raw.get("report") or {}
     if not isinstance(report_raw, dict):
         raise ValueError("radar config 'report' must be an object if present")
+    periodical_raw = raw.get("periodical") or {}
+    if not isinstance(periodical_raw, dict):
+        raise ValueError("radar config 'periodical' must be an object if present")
 
     return RadarSpec(
         output_dir=raw.get("output_dir") or "radar-output",
@@ -710,6 +717,20 @@ def load_radar_config(config_path: str) -> RadarSpec:
         report_build_dir=str(report_raw.get("build_dir") or DEFAULT_REPORT_BUILD_DIR),
         report_prompt_version=int(
             report_raw.get("prompt_version") or DEFAULT_REPORT_PROMPT_VERSION
+        ),
+        periodical_series=str(periodical_raw.get("series") or "Research Radar"),
+        periodical_issue=(
+            int(periodical_raw["issue"])
+            if periodical_raw.get("issue") is not None
+            else None
+        ),
+        periodical_focus=(
+            str(periodical_raw["focus"])
+            if periodical_raw.get("focus") is not None
+            else None
+        ),
+        periodical_supporting_papers=int(
+            periodical_raw.get("supporting_papers") or 6
         ),
         reference_depth=int(raw.get("reference_depth") or 2),
         max_references_per_paper=int(raw.get("max_references_per_paper") or 10),
