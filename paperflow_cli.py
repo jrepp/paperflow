@@ -6,6 +6,7 @@ import arxiv_radar_cli as radar_cli
 import boox_sync_cli
 from paperflow_periodical import (
     DEFAULT_PERIODICAL_QUEUE_PATH,
+    add_editorial_periodical_queue_item,
     add_periodical_queue_item,
     load_periodical_queue,
     propose_periodical_topics,
@@ -220,6 +221,42 @@ def periodical_queue_add_command(
             "queued": item["id"],
             "title": item["title"],
             "focus": item["focus"],
+            "issue": item.get("issue") or "",
+            "queue": queue_path,
+        }
+    )
+
+
+@queue_app.command("add-editorial")
+def periodical_queue_add_editorial_command(
+    title: str = typer.Option(..., help="Editorial issue title"),
+    queue_path: str = typer.Option(
+        DEFAULT_PERIODICAL_QUEUE_PATH,
+        help="Periodical topic queue path",
+    ),
+    series: str = typer.Option("Research Radar", help="Periodical series name"),
+    issue: int | None = typer.Option(None, help="Numbered issue"),
+    thesis: str = typer.Option("", help="Issue thesis or through line"),
+    section: list[str] = typer.Option(
+        None,
+        "--section",
+        help="Planned section title; repeat for multiple sections",
+    ),
+) -> None:
+    item = add_editorial_periodical_queue_item(
+        queue_path=queue_path,
+        title=title,
+        series=series,
+        issue=issue,
+        thesis=thesis,
+        sections=section or [],
+    )
+    print_header("Queued Editorial Issue")
+    print_kv(
+        {
+            "queued": item["id"],
+            "title": item["title"],
+            "type": item["type"],
             "issue": item.get("issue") or "",
             "queue": queue_path,
         }
