@@ -167,6 +167,24 @@ def test_topic_proposals_and_queue_items(tmp_path):
     assert periodical.get_periodical_queue_item(item["id"], str(queue_path))["issue"] == 3
 
 
+def test_editorial_queue_items_do_not_require_manifest_focus(tmp_path):
+    queue_path = tmp_path / "periodical-queue.json"
+
+    item = periodical.add_editorial_periodical_queue_item(
+        queue_path=str(queue_path),
+        title="The Research Radar House Style",
+        issue=1,
+        thesis="Establish typography, voice, characters, and the promise of the series.",
+        sections=["Typography", "Voice", "Unsung heroes"],
+    )
+
+    queued = periodical.get_periodical_queue_item(item["id"], str(queue_path))
+    assert queued["type"] == "editorial"
+    assert queued["focus"] == ""
+    assert queued["focus_paper"] is None
+    assert queued["sections"] == ["Typography", "Voice", "Unsung heroes"]
+
+
 def test_select_entries_by_ids_preserves_queue_order(tmp_path):
     manifest_path = _manifest(tmp_path / "manifest.json")
     manifest = periodical.load_manifest(str(manifest_path))

@@ -88,3 +88,33 @@ def test_publish_queue_list_empty_is_pretty(tmp_path):
     assert result.exit_code == 0
     assert "Periodical Queue" in result.output
     assert "queue is empty" in result.output
+
+
+def test_publish_queue_add_editorial(tmp_path):
+    queue = tmp_path / "queue.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "publish",
+            "queue",
+            "add-editorial",
+            "--queue-path",
+            str(queue),
+            "--title",
+            "The Research Radar House Style",
+            "--issue",
+            "1",
+            "--thesis",
+            "Establish the voice and visual grammar.",
+            "--section",
+            "Typography",
+            "--section",
+            "Voice",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Queued Editorial Issue" in result.output
+    assert "The Research Radar House Style" in result.output
+    assert queue.exists()
