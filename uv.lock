@@ -371,6 +371,7 @@ source = { editable = "." }
 dependencies = [
     { name = "pymupdf4llm" },
     { name = "pyyaml" },
+    { name = "rich" },
     { name = "textual" },
     { name = "typer" },
     { name = "websockets" },
@@ -387,6 +388,7 @@ requires-dist = [
     { name = "pymupdf4llm", specifier = ">=1.27.2.2" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.4.2" },
     { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "rich", specifier = ">=13.9.4" },
     { name = "testcontainers", marker = "extra == 'test'", specifier = ">=4.13.2" },
     { name = "textual", specifier = ">=8.2.3" },
     { name = "typer", specifier = ">=0.24.1" },

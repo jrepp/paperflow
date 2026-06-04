@@ -211,6 +211,37 @@ def add_periodical_queue_item(
     return item
 
 
+def add_editorial_periodical_queue_item(
+    *,
+    queue_path: str = DEFAULT_PERIODICAL_QUEUE_PATH,
+    title: str,
+    series: str = "Research Radar",
+    issue: int | None = None,
+    thesis: str = "",
+    sections: list[str] | None = None,
+) -> dict[str, Any]:
+    item = {
+        "id": slugify(f"{issue or 'next'}-{title}"),
+        "status": "queued",
+        "type": "editorial",
+        "series": series,
+        "issue": issue,
+        "title": title,
+        "focus": "",
+        "focus_paper": None,
+        "supporting_papers": [],
+        "thesis": thesis,
+        "sections": sections or [],
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+    queue = load_periodical_queue(queue_path)
+    topics = [topic for topic in queue.get("topics", []) if topic.get("id") != item["id"]]
+    topics.append(item)
+    queue["topics"] = topics
+    write_periodical_queue(queue, queue_path)
+    return item
+
+
 def get_periodical_queue_item(
     queue_item: str,
     queue_path: str = DEFAULT_PERIODICAL_QUEUE_PATH,
