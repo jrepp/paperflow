@@ -89,6 +89,7 @@ def init_command(
 radar_app.command("generate")(radar_cli.generate_command)
 radar_app.command("refresh")(radar_cli.refresh_command)
 radar_app.command("tui")(radar_cli.radar_tui_command)
+radar_app.command("add")(radar_cli.add_manual_radar_paper_command)
 radar_app.command("export")(radar_cli.export_command)
 
 sources_app.command("arxiv-ingest")(radar_cli.arxiv_ingest_command)

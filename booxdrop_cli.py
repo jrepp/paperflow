@@ -52,6 +52,7 @@ DEFAULT_PDF_CACHE_DIR = "artifacts/pdf-cache"
 DEFAULT_CURATED_MANIFEST_PATH = "artifacts/arxiv-radar-curated.json"
 DEFAULT_MANIFEST_PATH = "artifacts/arxiv-radar-manifest.json"
 DEFAULT_STAGED_MANIFEST_PATH = "artifacts/arxiv-radar-staged.json"
+DEFAULT_MANUAL_LIBRARY_PATH = "data/research-radar-library.json"
 DEFAULT_REPORT_TEX_PATH = "artifacts/arxiv-radar-summary.tex"
 DEFAULT_REPORT_PDF_PATH = "artifacts/arxiv-radar-summary.pdf"
 DEFAULT_REPORT_BUILD_DIR = "artifacts/report-build"
@@ -976,6 +977,218 @@ def curated_manifest(
     }
 
 
+def empty_manual_library() -> dict:
+    return {
+        "version": 1,
+        "description": "Durable record of manually added research radar papers.",
+        "entries": [],
+    }
+
+
+def load_manual_library(path: str = DEFAULT_MANUAL_LIBRARY_PATH) -> dict:
+    library_path = Path(path)
+    if not library_path.exists():
+        return empty_manual_library()
+    library = json.loads(library_path.read_text(encoding="utf-8"))
+    if not isinstance(library, dict):
+        raise ValueError(f"manual library must be a JSON object: {path}")
+    entries = library.get("entries")
+    if entries is None:
+        library["entries"] = []
+    elif not isinstance(entries, list):
+        raise ValueError(f"manual library entries must be a list: {path}")
+    return library
+
+
+def write_manual_library(library: dict, path: str = DEFAULT_MANUAL_LIBRARY_PATH) -> Path:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(library, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    return target
+
+
+def target_path_for_category(
+    storage_root: str,
+    category: str,
+    suggested_filename: str,
+    config_path: str = DEFAULT_RADAR_CONFIG,
+) -> str:
+    relative_target_path = category
+    config_file = Path(config_path)
+    if config_file.exists():
+        spec = load_radar_config(config_path)
+        for category_spec in spec.categories:
+            if category_spec.name.casefold() == category.casefold():
+                relative_target_path = category_spec.target_path
+                break
+    return str(PurePosixPath(storage_root) / relative_target_path / suggested_filename)
+
+
+def _manifest_entry_key(entry: dict) -> str:
+    return normalize_arxiv_id(str(entry.get("arxiv_id") or entry.get("resolved_id") or ""))
+
+
+def _append_entry_to_sync_contract(manifest: dict, entry: dict) -> None:
+    category_name = str(entry.get("category") or "Manual")
+    target_path = str(entry.get("target_path") or "")
+    if not target_path:
+        return
+    sync_contract = manifest.setdefault(
+        "sync_contract",
+        {
+            "kind": "library_sync_contract",
+            "version": 1,
+            "storage_root": manifest.get("storage_root") or DEFAULT_STORAGE_ROOT,
+            "categories": {},
+        },
+    )
+    sync_contract.setdefault("kind", "library_sync_contract")
+    sync_contract.setdefault("version", 1)
+    sync_contract.setdefault(
+        "storage_root", manifest.get("storage_root") or DEFAULT_STORAGE_ROOT
+    )
+    category = sync_contract.setdefault("categories", {}).setdefault(
+        category_name, {"physical_targets": [], "shelf_targets": []}
+    )
+    for field_name in ("physical_targets", "shelf_targets"):
+        targets = category.setdefault(field_name, [])
+        if target_path not in targets:
+            targets.append(target_path)
+
+
+def merge_manual_library_into_manifest(
+    manifest: dict,
+    *,
+    library_path: str = DEFAULT_MANUAL_LIBRARY_PATH,
+) -> dict:
+    library = load_manual_library(library_path)
+    durable_entries = [
+        entry for entry in library.get("entries", []) if isinstance(entry, dict)
+    ]
+    if not durable_entries:
+        return manifest
+
+    merged = dict(manifest)
+    entries = [entry for entry in merged.get("entries", []) if isinstance(entry, dict)]
+    seen = {_manifest_entry_key(entry) for entry in entries if _manifest_entry_key(entry)}
+    added = 0
+    for durable_entry in durable_entries:
+        key = _manifest_entry_key(durable_entry)
+        if not key or key in seen:
+            continue
+        entry = dict(durable_entry)
+        entry.setdefault("section", "manual")
+        entry.setdefault("category", "AI")
+        entries.append(entry)
+        seen.add(key)
+        added += 1
+        _append_entry_to_sync_contract(merged, entry)
+
+    merged["entries"] = entries
+    merged["selected_count"] = len(entries)
+    if added:
+        merged["manual_library"] = {
+            "path": library_path,
+            "entry_count": len(durable_entries),
+            "merged_count": added,
+        }
+    return merged
+
+
+def write_manifest(path: Path, manifest: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+
+def build_manual_radar_entry(
+    raw_id_or_url: str,
+    *,
+    category: str,
+    section: str,
+    storage_root: str,
+    config_path: str = DEFAULT_RADAR_CONFIG,
+) -> dict:
+    arxiv_id = extract_arxiv_id(raw_id_or_url)
+    if not arxiv_id:
+        raise ValueError(f"could not parse arXiv id: {raw_id_or_url}")
+    search_entry = fetch_arxiv_entries([arxiv_id])[0]
+    normalized_id = normalize_arxiv_id(search_entry.resolved_id)
+    entry = {
+        "category": category,
+        "section": section,
+        "arxiv_id": normalized_id,
+        "requested_id": search_entry.requested_id,
+        "resolved_id": search_entry.resolved_id,
+        "title": search_entry.title,
+        "authors": [],
+        "published": "",
+        "updated": "",
+        "primary_category": "",
+        "abs_url": search_entry.abs_url,
+        "pdf_url": search_entry.pdf_url,
+        "summary": search_entry.summary,
+        "suggested_filename": search_entry.suggested_filename,
+        "target_path": target_path_for_category(
+            storage_root,
+            category,
+            search_entry.suggested_filename,
+            config_path=config_path,
+        ),
+        "added_at": datetime.now(UTC).isoformat(),
+        "added_via": "manual",
+        "source_url": raw_id_or_url,
+    }
+    try:
+        parsed_entry = fetch_arxiv_search(
+            f"id:{normalized_id}", max_results=1, sort_by="relevance", sort_order="descending"
+        )[0]
+    except Exception:
+        parsed_entry = None
+    if parsed_entry:
+        entry.update(
+            {
+                "authors": parsed_entry.authors,
+                "published": parsed_entry.published,
+                "updated": parsed_entry.updated,
+                "primary_category": parsed_entry.primary_category,
+            }
+        )
+    return entry
+
+
+def add_manual_library_entry(
+    raw_id_or_url: str,
+    *,
+    category: str = "AI",
+    section: str = "manual",
+    storage_root: str = DEFAULT_STORAGE_ROOT,
+    library_path: str = DEFAULT_MANUAL_LIBRARY_PATH,
+    config_path: str = DEFAULT_RADAR_CONFIG,
+) -> tuple[dict, bool, Path]:
+    entry = build_manual_radar_entry(
+        raw_id_or_url,
+        category=category,
+        section=section,
+        storage_root=storage_root,
+        config_path=config_path,
+    )
+    library = load_manual_library(library_path)
+    entries = [item for item in library.get("entries", []) if isinstance(item, dict)]
+    key = _manifest_entry_key(entry)
+    for existing in entries:
+        if _manifest_entry_key(existing) == key:
+            return existing, False, Path(library_path)
+    entries.append(entry)
+    entries.sort(key=lambda item: str(item.get("added_at") or ""))
+    library["entries"] = entries
+    target = write_manual_library(library, library_path)
+    return entry, True, target
+
+
 def filter_radar_items(
     items: list[dict],
     *,
@@ -1073,6 +1286,7 @@ def export_radar_manifest(
     lookback_days: int | None = None,
     output_path: str | None = None,
     db_path: str | None = None,
+    manual_library_path: str | None = DEFAULT_MANUAL_LIBRARY_PATH,
 ) -> Path:
     report_file = Path(report_path)
     report = load_radar_report(str(report_file))
@@ -1091,15 +1305,16 @@ def export_radar_manifest(
         ),
     )
     manifest = curated_manifest(report, report_file, items)
+    if manual_library_path:
+        manifest = merge_manual_library_into_manifest(
+            manifest, library_path=manual_library_path
+        )
     target = (
         Path(output_path)
         if output_path
         else default_export_output_path(report_file, section)
     )
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
+    write_manifest(target, manifest)
 
     if db_path:
         _record_export_to_db(db_path, manifest, section=section, categories=categories, top=top, min_citations=min_citations, max_citations=max_citations, since=since, lookback_days=lookback_days)
@@ -1284,12 +1499,17 @@ async def prepare_manifest(
     staged_output: str | None = None,
     db_path: str | None = None,
     curated_path: str | None = None,
+    manual_library_path: str | None = DEFAULT_MANUAL_LIBRARY_PATH,
 ) -> dict:
     if curated_path and Path(curated_path).exists():
         curated = Path(curated_path)
         target = Path(manifest_output) if manifest_output else Path(DEFAULT_MANIFEST_PATH)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(curated, target)
+        manifest = load_manifest(str(curated))
+        if manual_library_path:
+            manifest = merge_manual_library_into_manifest(
+                manifest, library_path=manual_library_path
+            )
+        write_manifest(target, manifest)
         manifest_path = target
     else:
         manifest_path = export_radar_manifest(
@@ -1304,6 +1524,7 @@ async def prepare_manifest(
             lookback_days=lookback_days,
             output_path=manifest_output,
             db_path=db_path,
+            manual_library_path=manual_library_path,
         )
     cache_summary = await prime_cache(str(manifest_path), cache_dir)
     staged_path = await stage_manifest(str(manifest_path), cache_dir, staged_output)

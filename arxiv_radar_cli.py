@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -9,6 +10,7 @@ import typer
 
 from booxdrop_cli import (
     DEFAULT_CURATED_MANIFEST_PATH,
+    DEFAULT_MANUAL_LIBRARY_PATH,
     DEFAULT_PDF_CACHE_DIR,
     DEFAULT_MANIFEST_PATH,
     DEFAULT_RADAR_CONFIG,
@@ -18,8 +20,10 @@ from booxdrop_cli import (
     DEFAULT_REPORT_SUMMARY_CACHE_DIR,
     DEFAULT_REPORT_TEX_PATH,
     DEFAULT_STAGED_MANIFEST_PATH,
+    add_manual_library_entry,
     build_summary_report,
     export_radar_manifest,
+    merge_manual_library_into_manifest,
     prepare_manifest,
     radar_export_summary,
     latest_radar_report_path,
@@ -254,6 +258,54 @@ def arxiv_ingest_command(
     raise typer.Exit(
         asyncio.run(run_arxiv_ingest(input, ids or [], category, storage_root, output))
     )
+
+
+@app.command("add")
+def add_manual_radar_paper_command(
+    paper: str = typer.Argument(..., help="arXiv id or arXiv abs/pdf URL"),
+    category: str = typer.Option("AI", help="Target research radar category"),
+    section: str = typer.Option("manual", help="Manifest section label"),
+    storage_root: str = typer.Option(
+        "/storage/emulated/0/Books",
+        help="Storage root used to build suggested target paths",
+    ),
+    library: str = typer.Option(
+        DEFAULT_MANUAL_LIBRARY_PATH,
+        help="Durable manual research radar library path",
+    ),
+    config: str = typer.Option(
+        DEFAULT_RADAR_CONFIG,
+        help="Path to the stable local arXiv radar YAML config",
+    ),
+    curated: str | None = typer.Option(
+        DEFAULT_CURATED_MANIFEST_PATH,
+        help="Also merge the durable library into this curated manifest when it exists",
+    ),
+    manifest: str | None = typer.Option(
+        DEFAULT_MANIFEST_PATH,
+        help="Also merge the durable library into this manifest when it exists",
+    ),
+) -> None:
+    entry, added, path = add_manual_library_entry(
+        paper,
+        category=category,
+        section=section,
+        storage_root=storage_root,
+        library_path=library,
+        config_path=config,
+    )
+    for target in [curated, manifest]:
+        if target and Path(target).exists():
+            payload = load_manifest(target)
+            payload = merge_manual_library_into_manifest(payload, library_path=library)
+            Path(target).write_text(
+                json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+    typer.echo(f"library={path}")
+    typer.echo(f"status={'added' if added else 'already_present'}")
+    typer.echo(f"arxiv_id={entry.get('arxiv_id')}")
+    typer.echo(f"title={entry.get('title')}")
 
 
 @app.command("generate")

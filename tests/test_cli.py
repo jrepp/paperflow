@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from paperflow_cli import app
+from booxdrop_cli import merge_manual_library_into_manifest
 
 
 runner = CliRunner()
@@ -118,3 +119,42 @@ def test_publish_queue_add_editorial(tmp_path):
     assert "Queued Editorial Issue" in result.output
     assert "The Research Radar House Style" in result.output
     assert queue.exists()
+
+
+def test_manual_library_merges_into_manifest(tmp_path):
+    library = tmp_path / "research-radar-library.json"
+    library.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "category": "AI",
+                        "section": "manual",
+                        "arxiv_id": "2605.15184",
+                        "title": "Is Grep All You Need?",
+                        "target_path": "/storage/emulated/0/Books/AI/Research radar/grep.pdf",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = {
+        "storage_root": "/storage/emulated/0/Books",
+        "selected_count": 0,
+        "entries": [],
+        "sync_contract": {
+            "kind": "library_sync_contract",
+            "version": 1,
+            "storage_root": "/storage/emulated/0/Books",
+            "categories": {},
+        },
+    }
+
+    merged = merge_manual_library_into_manifest(manifest, library_path=str(library))
+
+    assert merged["selected_count"] == 1
+    assert merged["entries"][0]["arxiv_id"] == "2605.15184"
+    assert merged["sync_contract"]["categories"]["AI"]["physical_targets"] == [
+        "/storage/emulated/0/Books/AI/Research radar/grep.pdf"
+    ]
