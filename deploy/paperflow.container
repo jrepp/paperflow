@@ -1,0 +1,26 @@
+# Example rootless Quadlet. Customize local volume and port before installing.
+# Keep host-specific settings in an ignored *.local.container file.
+
+[Unit]
+Description=Paperflow workspace reader
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=paperflow
+Image=localhost/paperflow:local
+Pull=never
+AutoUpdate=disabled
+PublishPort=127.0.0.1:8410:8000
+Volume=/srv/paperflow:/data:Z
+UserNS=keep-id:uid=1000,gid=1000
+NoNewPrivileges=yes
+DropCapability=all
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
