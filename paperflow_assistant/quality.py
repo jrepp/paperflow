@@ -33,7 +33,11 @@ def validate_analysis(analysis, revision, settings, storage):
         if len(effect.mechanism) < effect.order:
             raise ValueError("Effects require an explicit chain for each order")
     prose = [analysis.summary, *analysis.limitations, *analysis.research_gaps]
-    prose += [f.statement for f in [*analysis.findings, *analysis.biases]]
+    for finding in [*analysis.findings, *analysis.biases]:
+        prose.extend((finding.statement, finding.uncertainty))
+    for effect in analysis.effects:
+        prose.extend((effect.hypothesis, *effect.mechanism, *effect.assumptions,
+                      effect.time_horizon, effect.falsifier, effect.uncertainty))
     sentences = [s for p in prose for s in re.split(r"(?<=[.!?])\s+", p) if s.strip()]
     long_sentences = sum(len(s.split()) > 25 for s in sentences)
     return {"citation_count": len(refs), "valid_citations": len(refs),

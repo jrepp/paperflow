@@ -224,6 +224,17 @@ def test_cost_rates_cache_peak_off_peak_and_unknown_models(tmp_path):
     assert estimate_cost({**usage, 'cache_read_tokens': 2000000}, prices, 'deepseek-flash', peak)[0] is None
 
 
+def test_style_checks_include_effects_and_uncertainty_but_not_source_quotes(tmp_path):
+    settings, storage, item, rev, output = fixture(tmp_path)
+    output['effects'] = [{'order': 2, 'hypothesis': 'Latency changes adoption.',
+        'mechanism': ['A faster response changes use.', 'Repeated use changes demand.'],
+        'assumptions': ['Other conditions stay constant.'], 'time_horizon': 'One year.',
+        'falsifier': 'Demand remains constant.', 'uncertainty': ' '.join(['uncertain']*26)+'.',
+        'citations': output['findings'][0]['citations']}]
+    result = validate_analysis(Analysis.model_validate(output), rev, settings.assistant, storage)
+    assert result['long_sentences'] == 1
+
+
 def test_request_ledger_preserves_failures_retries_and_spend(tmp_path):
     settings, storage, item, rev, output = fixture(tmp_path)
     worker = AssistantWorker(settings, runner=runner(output))
