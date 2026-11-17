@@ -1,5 +1,7 @@
 name: Deployable release
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: '23 9 * * *'
   release:
@@ -12,7 +14,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   validate:
-    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v')
+    if: >-
+      (github.event_name != 'release' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v'))
     uses: ./.github/workflows/validate.yml
   bundle:
     needs: validate
@@ -46,6 +50,11 @@ jobs:
           set -euo pipefail
           tag="$RELEASE_TAG"
           if [ "$EVENT" != release ]; then
+            latest=$(gh api "repos/$GH_REPO/commits/main" --jq .sha)
+            if [ "$latest" != "$GITHUB_SHA" ]; then
+              echo 'A newer main commit exists; its deployment supersedes this build.'
+              exit 0
+            fi
             tag="nightly-$RUN_ID-$ATTEMPT"
             gh release create "$tag" --target "$GITHUB_SHA" --prerelease --title "Nightly $GITHUB_SHA" --notes 'Validated container bundle. See deployment.json for exact build identity.'
           fi
