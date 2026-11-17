@@ -1,6 +1,7 @@
 """Research settings: explicit overrides > environment > YAML > defaults."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -33,7 +34,9 @@ class MonitorSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool = True
     schedule_enabled: bool = True
-    heartbeat_url: SecretStr | None = Field(default=None, exclude=True)
+    heartbeat_url: SecretStr | None = Field(
+        default_factory=lambda: SecretStr(os.environ['PAPERFLOW_HEARTBEAT_URL'])
+        if os.environ.get('PAPERFLOW_HEARTBEAT_URL') else None, exclude=True)
     heartbeat_interval_seconds: int = Field(default=60, ge=30, le=3600)
     workers: int = Field(default=2, ge=1, le=16)
     poll_seconds: float = Field(default=1, ge=0.05, le=30)

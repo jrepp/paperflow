@@ -66,3 +66,12 @@ def test_heartbeat_does_not_follow_redirects_or_accept_false_acknowledgments():
         server.shutdown()
         thread.join()
         server.server_close()
+
+
+def test_flat_heartbeat_environment_is_private_and_optional(monkeypatch):
+    monkeypatch.setenv('PAPERFLOW_HEARTBEAT_URL', 'https://example.org/private-check')
+    settings = ResearchSettings()
+    assert settings.monitor.heartbeat_url.get_secret_value().endswith('/private-check')
+    assert 'private-check' not in str(settings.model_dump())
+    monkeypatch.delenv('PAPERFLOW_HEARTBEAT_URL')
+    assert ResearchSettings().monitor.heartbeat_url is None

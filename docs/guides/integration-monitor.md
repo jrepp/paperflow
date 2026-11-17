@@ -282,7 +282,7 @@ build timestamp, and build channel. Local builds can have unknown commit/time.
 `GET /health/live` checks process liveness. `GET /health/ready` checks storage,
 scheduler freshness, overdue runs, and current ingestion/curation errors.
 
-Set `PAPERFLOW_MONITOR__HEARTBEAT_URL` in private runtime configuration to enable
+Set `PAPERFLOW_HEARTBEAT_URL` in private runtime configuration to enable
 Healthchecks-compatible POST pings. The monitor sends an empty success ping when
 ready or a `/fail` ping when unhealthy, every 60 seconds by default. Configure the
 external check for a one-minute period with suitable startup/deployment grace.
