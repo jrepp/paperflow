@@ -256,3 +256,13 @@ Preserve the previous working release until validation succeeds. Invest in missi
 validation, atomic promotion, health checks, and automatic rollback controls when
 needed for reliable deployment. Host-specific activation and rollback configuration
 remain in the external deployment repository; do not bypass failing release gates.
+
+### Merge and deploy through the queue
+
+Create feature branches and pull requests; do not push changes directly to main.
+Use Mergify's speculative merge queue after the **PR Status Check** succeeds.
+The owner's validated PRs receive the configured bot approval; other authors
+need a review. Respect `do-not-merge`, `work-in-progress`, and requested changes.
+Do not bypass required checks, deactivate the ruleset, or merge outside the queue
+as a routine shortcut. A merged PR automatically starts the validated deployment
+workflow; follow it through activation and public verification before handoff.
