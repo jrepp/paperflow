@@ -185,13 +185,30 @@ class IntegrationMonitor:
     def _run_assistant(self):
         started = time.monotonic()
         with self.telemetry.tracer.start_as_current_span('curation.run', record_exception=False) as span:
-            result = self.assistant.tick()
-            if result:
+            last_result = None
+            for _ in range(self.settings.assistant.items_per_cycle):
+                if self._stop.is_set():
+                    break
+                result = self.assistant.tick()
+                if not result:
+                    break
+                last_result = result
                 span.set_attribute('curation.run_id', result['id'])
                 span.set_attribute('curation.status', result['status'])
                 self.telemetry.curation_runs.add(1, {'status': result['status']})
+                for request in self.assistant.store.request_metrics(result['id'], result['attempt']):
+                    labels = {'role': request['role'], 'model': request['model']}
+                    usage = request.get('usage') or {}
+                    for direction in ('input', 'output'):
+                        self.telemetry.curation_tokens.add(usage.get(direction+'_tokens', 0), {**labels, 'direction': direction})
+                    self.telemetry.curation_cached_tokens.add(usage.get('cache_read_tokens', 0), labels)
+                    if request.get('estimated_usd') is None:
+                        self.telemetry.curation_unpriced.add(1, labels)
+                    else:
+                        self.telemetry.curation_spend.add(float(request['estimated_usd']), labels)
+            if last_result:
                 self.telemetry.curation_duration.record(time.monotonic()-started)
-            return result
+            return last_result
 
     def _run_topics(self):
         from paperflow_storage_sqlite import SQLiteResearchStorage

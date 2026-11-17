@@ -152,10 +152,15 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
         return monitor.store.runs(limit)
 
     @app.get("/api/monitor/curation")
-    def curation_metrics():
+    def curation_metrics(days: int = Query(default=7, ge=1, le=365),
+                         planned_items_per_day: int | None = Query(default=None, ge=1, le=10000)):
         if not monitor.assistant:
             return {"enabled": False}
-        return {"enabled": True, **monitor.assistant.store.metrics()}
+        return {"enabled": True, **monitor.assistant.store.metrics(),
+                "spend": monitor.assistant.store.spend(days, planned_items_per_day),
+                "schedule": {"interval_seconds": settings.assistant.interval_seconds,
+                             "items_per_cycle": settings.assistant.items_per_cycle,
+                             "daily_attempt_limit": settings.assistant.daily_attempt_limit}}
 
     @app.get("/api/monitor/curation/runs")
     def curation_runs(limit: int = Query(default=20, ge=1, le=100)):

@@ -123,6 +123,23 @@ def test_real_agent_wiring_without_network_and_quality(tmp_path):
     assert result[0]['summary'] == output['summary']
     assert result[2]['judgment'] == judge
     assert result[3]['requests'] >= 2
+    assert set(worker.store.spend()['by_role_and_model']) == {'reasoning:test', 'evaluation:test'}
+
+
+def test_failed_model_request_is_metered_as_unknown_not_free(tmp_path):
+    from pydantic_ai.models.function import FunctionModel
+    settings, storage, item, rev, output = fixture(tmp_path)
+    async def unavailable(messages, info):
+        raise RuntimeError('synthetic provider failure')
+    def failing_runner(context, item):
+        return asyncio.run(run_agent(context, item, FunctionModel(unavailable), TestModel()))
+    worker = AssistantWorker(settings, runner=failing_runner)
+    worker.initialize()
+    assert worker.tick()['status'] == 'failed'
+    report = worker.store.spend()
+    assert report['unpriced_requests'] == 1
+    assert report['estimate_incomplete'] and report['billed_usd'] is None
+    assert report['estimated_usd_per_completed_job'] is None
 
 
 def test_monitor_runs_curator_and_keeps_ingestion_pool_separate(tmp_path, monkeypatch):
@@ -165,6 +182,67 @@ def test_daily_budget_survives_restart(tmp_path):
     assert worker.store.claim(3, 1)
     worker.store.recover()
     assert worker.store.claim(3, 1) is None
+
+
+def test_fresh_revisions_take_priority_over_historical_backlog(tmp_path):
+    settings, storage, item, rev, output = fixture(tmp_path)
+    worker = AssistantWorker(settings)
+    worker.initialize()
+    worker.store.reconcile(storage, 'one')
+    newer = CurationService(storage).add(ContentRevision.from_markdown(item_id=item.id,
+        markdown='A new version reports a different result.', evidence_basis='abstract'))
+    worker.store.reconcile(storage, 'one')
+    assert worker.store.claim(3)['revision_id'] == str(newer.id)
+    assert worker.store.metrics()['counts'] == {'queued': 1, 'running': 1}
+
+
+def test_cadence_intake_and_prices_do_not_requeue_completed_content(tmp_path):
+    settings, *_ = fixture(tmp_path)
+    before = fingerprint(settings.assistant)
+    settings.assistant.interval_seconds = 900
+    settings.assistant.items_per_cycle = 10
+    settings.assistant.reasoning_prices.input_per_million = 2
+    assert fingerprint(settings.assistant) == before
+    settings.assistant.reasoning_model = 'different-model'
+    assert fingerprint(settings.assistant) != before
+
+
+def test_cost_rates_cache_peak_off_peak_and_unknown_models(tmp_path):
+    from datetime import UTC, datetime
+    from decimal import Decimal
+    from paperflow_assistant.usage import estimate_cost
+    settings, *_ = fixture(tmp_path)
+    usage = {'input_tokens': 1000000, 'cache_read_tokens': 500000, 'output_tokens': 100000}
+    prices = settings.assistant.reasoning_prices
+    peak = datetime(2026, 11, 17, 8, tzinfo=UTC)
+    off_peak = datetime(2026, 11, 17, 12, tzinfo=UTC)
+    assert Decimal(estimate_cost(usage, prices, 'deepseek-flash', peak)[0]) == Decimal('0.273')
+    assert Decimal(estimate_cost(usage, prices, 'deepseek-flash', off_peak)[0]) == Decimal('0.1365')
+    prices.holiday_dates_utc = ['2026-11-17']
+    assert estimate_cost(usage, prices, 'deepseek-flash', peak)[1] == 'off_peak'
+    assert estimate_cost(usage, prices, 'unknown-model', peak)[0] is None
+    assert estimate_cost({**usage, 'cache_read_tokens': 2000000}, prices, 'deepseek-flash', peak)[0] is None
+
+
+def test_request_ledger_preserves_failures_retries_and_spend(tmp_path):
+    settings, storage, item, rev, output = fixture(tmp_path)
+    worker = AssistantWorker(settings, runner=runner(output))
+    worker.initialize()
+    worker.tick()
+    for request_id, role, attempt, cost in [('a','reasoning',1,'0.2'),('b','decision',2,'0.01'),('c','evaluation',1,None)]:
+        worker.store.start_request(request_id, 'job', attempt, role, 'test-model', time.time())
+        worker.store.finish_request(request_id, {'status': 'succeeded' if cost else 'failed',
+            'estimated_usd': cost, 'usage': {'input_tokens': 100, 'output_tokens': 10, 'cache_read_tokens': 50} if cost else None})
+    report = worker.store.spend(7, 50)
+    assert report['estimated_usd'] == '0.21'
+    assert report['retry_estimated_usd'] == '0.01'
+    assert report['projected_daily_usd'] == '10.50'
+    assert report['input_tokens'] == 200 and report['cache_read_tokens'] == 100
+    assert report['unpriced_requests'] == 1 and report['estimate_incomplete']
+    assert report['billed_usd'] is None
+    worker.store.start_request('interrupted', 'job', 3, 'reasoning', 'test', time.time())
+    worker.store.recover()
+    assert worker.store.spend()['unpriced_requests'] == 2
 
 
 def test_prompt_contains_embedded_voice_and_memory_contract():

@@ -10,6 +10,16 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class TokenPrices(StrictModel):
+    model: str
+    as_of: str = "2026-11-17"
+    input_per_million: float = Field(ge=0)
+    cached_input_per_million: float = Field(ge=0)
+    output_per_million: float = Field(ge=0)
+    off_peak_multiplier: float = Field(default=1, gt=0, le=1)
+    holiday_dates_utc: list[str] = Field(default_factory=list)
+
+
 class AssistantSettings(StrictModel):
     enabled: bool = False
     path: Path = Path("artifacts/curation.db")
@@ -20,6 +30,13 @@ class AssistantSettings(StrictModel):
     decision_base_url: str = "https://api.typesafe.ai"
     decision_key: SecretStr | None = Field(default=None, exclude=True)
     interval_seconds: int = Field(default=60, ge=1)
+    items_per_cycle: int = Field(default=1, ge=1, le=20)
+    reasoning_prices: TokenPrices = Field(default_factory=lambda: TokenPrices(
+        model='deepseek-flash', input_per_million=0.3, cached_input_per_million=0.006,
+        output_per_million=1.2, off_peak_multiplier=0.5))
+    decision_prices: TokenPrices = Field(default_factory=lambda: TokenPrices(
+        model='jev-1.14.0', input_per_million=0.042, cached_input_per_million=0.042,
+        output_per_million=0))
     timeout_seconds: int = Field(default=240, ge=1, le=1800)
     request_limit: int = Field(default=12, ge=1, le=100)
     tool_limit: int = Field(default=40, ge=1, le=200)
@@ -30,6 +47,7 @@ class AssistantSettings(StrictModel):
     daily_attempt_limit: int = Field(default=100, ge=1, le=10000)
     retry_seconds: int = Field(default=120, ge=1)
     evaluation_sample_rate: float = Field(default=0.2, ge=0, le=1)
+    evaluation_token_limit: int = Field(default=32000, ge=1000, le=100000)
     source_character_limit: int = Field(default=60000, ge=1000, le=200000)
     categories: list[str] = Field(default_factory=lambda: [
         "artificial-intelligence", "computing", "science", "engineering", "society", "other",

@@ -22,10 +22,10 @@ WORKDIR /app
 
 # Install locked dependencies first so source edits do not invalidate this layer.
 COPY pyproject.toml uv.lock README.md ./
-COPY paperflow_reader ./paperflow_reader
-COPY paperflow_assistant ./paperflow_assistant
 RUN uv sync --locked --no-dev --no-install-project
 
+COPY paperflow_reader ./paperflow_reader
+COPY paperflow_assistant ./paperflow_assistant
 COPY *.py ./
 RUN uv sync --locked --no-dev
 

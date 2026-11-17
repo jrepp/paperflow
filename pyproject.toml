@@ -22,7 +22,7 @@ dependencies = [
   "textual>=8.2.3",
   "typer>=0.24.1",
   "websockets>=16.0",
-  "pydantic-ai-slim[openai,typesafe]>=2.69.0",
+  "pydantic-ai-slim[openai,typesafe]>=2.69.0,<3",
 ]
 
 [project.optional-dependencies]

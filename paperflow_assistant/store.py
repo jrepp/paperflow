@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import sqlite3
 import time
+from decimal import Decimal
 from uuid import uuid4
 
 from paperflow_storage import ConflictError
@@ -51,6 +52,8 @@ class AssistantStore:
         with self.connection(True) as conn:
             conn.execute("UPDATE assistant_jobs SET status='queued', error='Interrupted', available_at=? WHERE status='running'", (time.time(),))
             conn.execute("UPDATE assistant_attempts SET status='interrupted',finished_at=? WHERE status='running'", (time.time(),))
+            conn.execute("UPDATE assistant_requests SET payload=? WHERE payload IS NULL",
+                         (encode({'status': 'interrupted', 'usage': None, 'estimated_usd': None}),))
 
     def reconcile(self, storage, fingerprint, batch=200):
         with self.connection() as conn:
@@ -89,7 +92,10 @@ class AssistantStore:
             if count >= daily_attempt_limit:
                 return None
             conn.execute("UPDATE assistant_jobs SET status='failed',error='AttemptsExhausted' WHERE status='queued' AND attempts>=?", (max_attempts,))
-            row = conn.execute("SELECT * FROM assistant_jobs WHERE status='queued' AND available_at<=? ORDER BY queued_at,id LIMIT 1", (time.time(),)).fetchone()
+            row = conn.execute("""SELECT j.* FROM assistant_jobs j
+                JOIN assistant_documents d ON d.revision_id=j.revision_id
+                WHERE j.status='queued' AND j.available_at<=?
+                ORDER BY json_extract(d.revision,'$.created_at') DESC,j.queued_at,j.id LIMIT 1""", (time.time(),)).fetchone()
             if row is None:
                 return None
             conn.execute("INSERT OR REPLACE INTO assistant_meta VALUES (?,?)", ('attempts:'+today, str(count+1)))
@@ -183,6 +189,79 @@ class AssistantStore:
         with self.connection(True) as conn:
             conn.execute("INSERT INTO assistant_decisions VALUES (?,?,?)", (job_id, decision_id, encode(payload)))
 
+    def record_tool(self, job_id, name, outcome):
+        with self.connection(True) as conn:
+            conn.execute('INSERT INTO assistant_tool_events VALUES (?,?,?,?)', (job_id, name, outcome, time.time()))
+
+    def start_request(self, request_id, job_id, attempt, role, model, at):
+        with self.connection(True) as conn:
+            conn.execute('INSERT INTO assistant_requests VALUES (?,?,?,?,?,?,NULL)',
+                         (request_id, job_id, attempt, role, model, at))
+
+    def finish_request(self, request_id, payload):
+        with self.connection(True) as conn:
+            conn.execute('UPDATE assistant_requests SET payload=? WHERE id=?', (encode(payload), request_id))
+
+    def request_metrics(self, job_id, attempt):
+        with self.connection() as conn:
+            rows = conn.execute('SELECT role,model,payload FROM assistant_requests WHERE job_id=? AND attempt=?',
+                                (job_id, attempt)).fetchall()
+        return [{'role': r['role'], 'model': r['model'], **(json.loads(r['payload']) if r['payload'] else {})} for r in rows]
+
+    def spend(self, days=7, planned_items_per_day=None):
+        since = time.time()-days*86400
+        with self.connection() as conn:
+            rows = conn.execute('SELECT * FROM assistant_requests WHERE started_at>=? ORDER BY started_at', (since,)).fetchall()
+            completed = conn.execute("SELECT COUNT(*) FROM assistant_jobs WHERE status='succeeded' AND finished_at>=?", (since,)).fetchone()[0]
+        groups, daily = {}, {}
+        total, retry_cost = Decimal(0), Decimal(0)
+        missing, pending, priced = 0, 0, 0
+        input_tokens, output_tokens, cache_tokens = 0, 0, 0
+        for row in rows:
+            payload = json.loads(row['payload']) if row['payload'] else {'status': 'pending'}
+            key = row['role'] + ':' + (payload.get('returned_model') or row['model'])
+            group = groups.setdefault(key, {'requests': 0, 'input_tokens': 0, 'output_tokens': 0,
+                'cache_read_tokens': 0, 'estimated_usd': Decimal(0), 'unpriced_requests': 0})
+            group['requests'] += 1
+            day = datetime.fromtimestamp(row['started_at'], UTC).date().isoformat()
+            day_total = daily.setdefault(day, {'estimated_usd': Decimal(0), 'requests': 0, 'unpriced_requests': 0})
+            day_total['requests'] += 1
+            usage = payload.get('usage') or {}
+            for key in ('input_tokens', 'output_tokens', 'cache_read_tokens'):
+                group[key] += usage.get(key, 0)
+            input_tokens += usage.get('input_tokens', 0)
+            output_tokens += usage.get('output_tokens', 0)
+            cache_tokens += usage.get('cache_read_tokens', 0)
+            cost = payload.get('estimated_usd')
+            if cost is None:
+                missing += 1
+                pending += int(payload['status'] == 'pending')
+                group['unpriced_requests'] += 1
+                day_total['unpriced_requests'] += 1
+            else:
+                amount = Decimal(cost)
+                priced += 1
+                total += amount
+                group['estimated_usd'] += amount
+                day_total['estimated_usd'] += amount
+                if row['attempt'] > 1:
+                    retry_cost += amount
+        for value in [*groups.values(), *daily.values()]:
+            value['estimated_usd'] = str(value['estimated_usd'])
+        average = total/completed if completed else None
+        return {'window_days': days, 'currency': 'USD', 'estimated_usd': str(total),
+                'billed_usd': None, 'priced_requests': priced, 'unpriced_requests': missing,
+                'pending_requests': pending, 'input_tokens': input_tokens, 'output_tokens': output_tokens,
+                'cache_read_tokens': cache_tokens, 'retry_estimated_usd': str(retry_cost),
+                'completed_jobs': completed,
+                'estimated_usd_per_completed_job': str(average) if average is not None else None,
+                'tokens_per_completed_job': (input_tokens+output_tokens)/completed if completed else None,
+                'by_role_and_model': groups, 'by_utc_day': daily,
+                'planned_items_per_day': planned_items_per_day,
+                'projected_daily_usd': str(average*planned_items_per_day) if average is not None and planned_items_per_day is not None else None,
+                'estimate_incomplete': bool(missing),
+                'limitations': 'Token-price estimate, not billed spend. Missing usage is unknown, not free. Projection assumes the observed work mix and retry rate. Costs and completions can cross window boundaries. Chinese public holidays require configured dates.'}
+
     def analysis(self, item_id):
         with self.connection() as conn:
             row = conn.execute("""SELECT j.id,j.revision_id,j.output,j.validation,j.evaluation FROM assistant_jobs j
@@ -275,6 +354,8 @@ CREATE TABLE IF NOT EXISTS assistant_jobs (
 );
 CREATE INDEX IF NOT EXISTS assistant_jobs_status ON assistant_jobs(status,available_at);
 CREATE TABLE IF NOT EXISTS assistant_attempts (job_id TEXT,attempt INTEGER,status TEXT,started_at REAL,finished_at REAL,usage TEXT,error TEXT,PRIMARY KEY(job_id,attempt));
+CREATE TABLE IF NOT EXISTS assistant_requests (id TEXT PRIMARY KEY,job_id TEXT,attempt INTEGER,role TEXT,model TEXT,started_at REAL,payload TEXT);
+CREATE TABLE IF NOT EXISTS assistant_tool_events (job_id TEXT,name TEXT,outcome TEXT,created_at REAL);
 CREATE TABLE IF NOT EXISTS assistant_memory (id TEXT,version INTEGER,kind TEXT,status TEXT,payload TEXT,PRIMARY KEY(id,version));
 CREATE VIRTUAL TABLE IF NOT EXISTS assistant_memory_index USING fts5(id UNINDEXED,text);
 CREATE TABLE IF NOT EXISTS assistant_receipts (key TEXT PRIMARY KEY,fingerprint TEXT,result TEXT);

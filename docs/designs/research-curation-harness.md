@@ -102,6 +102,8 @@ defaults to `artifacts/curation.db` and must differ from the research database.
 It stores the queue, source index, memory, analyses, decisions, and evaluation receipts.
 The monitor owns recovery and one dedicated curation worker. Ingestion uses its
 existing worker pool. The curation interval defaults to 60 seconds.
+Recent revisions take priority over the historical backlog. Each tick indexes at
+most 10,000 new source revisions before it claims a model job.
 
 The reasoning key comes from `DS4_API_KEY` or the secret setting
 `PAPERFLOW_ASSISTANT__REASONING_KEY`. The decision key comes from `JEV_KEY` or
@@ -112,7 +114,9 @@ both key fields. Provider URLs and model IDs remain configurable.
 Default limits are 100 attempts per UTC day, 3 attempts per job, 12 model requests,
 40 tool calls, 60,000 reported tokens, 12 decision calls, and 3 decision layers.
 The reasoner has a 240-second timeout. Sampled evaluation has a separate 60-second
-timeout and shares the model request and token budget. Failed requests can incur
+timeout, two-request limit, and 32,000-token budget so curation cannot consume its
+allocation. Token limits are checked between requests, so a final response can
+exceed the remaining budget. Failed requests can incur
 usage that the provider does not report. These are request limits, not a dollar cap.
 
 `GET /api/monitor/curation` returns aggregate validation signals. The Sources page
@@ -124,7 +128,9 @@ bias assessments, conditional effects, and citations.
 Activity counts use source revision and harness configuration as the job unit.
 They include eligible jobs, completed jobs, backlog, attempts, retries, failures,
 open follow-ups, token usage, and processing duration. A new prompt or configuration
-creates new jobs. Retries do not increase the eligible-job denominator.
+creates new jobs when the prompt, model, source limit, or taxonomy changes.
+Cadence, intake, budgets, evaluation sampling, and price changes do not requeue
+completed content. Retries do not increase the eligible-job denominator.
 
 Deterministic validation checks the output schema, configured categories, evidence
 basis, source references, exact quote offsets, and causal chain length. The report
@@ -142,6 +148,48 @@ requires all dimensions to pass. The 95 percent Wilson interval describes the
 evaluator's observed pass proportion. It does not measure truth or compensate for
 systematic evaluator errors. No sample produces no estimate. Human-calibrated
 accuracy remains unknown until independently reviewed examples exist.
+
+## Tokens, spend, and intake tuning
+
+Each model request creates a durable ledger entry before network access. Its
+receipt records the role (reasoning, decision, or evaluation), requested and
+returned model, attempt number, request time, latency, input tokens, output tokens,
+and cached input tokens. Failed and interrupted requests retain unknown usage
+instead of a zero-cost claim. Successful responses remain metered even when output
+validation later rejects the analysis.
+
+Each receipt snapshots configured rates and their verification date. The initial
+rates were checked on November 17, 2026:
+
+| Model | Input per million | Cached input per million | Output per million |
+| --- | --- | --- | --- |
+| DeepSeek Flash, peak | USD 0.30 | USD 0.006 | USD 1.20 |
+| DeepSeek Flash, off-peak | USD 0.15 | USD 0.003 | USD 0.60 |
+| Jev 1.14 | USD 0.042 | USD 0.042 | USD 0 |
+
+Sources: [DeepSeek pricing](https://api-docs.deepseek.com/quick_start/pricing/)
+and [TypeSafe models](https://docs.typesafe.ai/models).
+
+DeepSeek peak periods are weekdays from 01:00 to 04:00 and 06:00 to 10:00 UTC,
+excluding Chinese public holidays. The estimator uses request start time and
+configured holiday dates. An empty holiday calendar can overestimate spend on
+holidays. Account credits, invoice adjustments, and pricing changes are not known
+to the estimator. A model without matching configured rates is unpriced.
+
+The Sources page shows seven-day estimated spend, cost per completed analysis,
+retry spend, token totals, cache usage, and a role/model breakdown. The monitor API
+also returns daily UTC totals, request pricing coverage, and token use per completed
+job. Pass `days=30` for a different window. Pass `planned_items_per_day=50` for a
+daily spend projection from the observed work mix and retry rate. The projection
+is incomplete when usage is missing. Costs and completions can cross the window
+boundary. Billed spend remains unknown without account billing reconciliation.
+
+Tune `research.assistant.interval_seconds`, `items_per_cycle`, and
+`daily_attempt_limit` together. The default is one item per 60-second cycle with
+at most 100 attempts per UTC day. One worker processes each cycle sequentially.
+An expensive cycle can take longer than its configured interval. The daily limit
+includes retries. Change `evaluation_sample_rate` to trade evaluation coverage
+against overhead, and compare quality estimates before reducing that coverage.
 
 The worker uses available source revisions. It does not claim full-paper coverage
 when ingestion supplied only an excerpt. Full-text extraction remains in the
