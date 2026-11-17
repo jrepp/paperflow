@@ -33,6 +33,8 @@ class MonitorSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool = True
     schedule_enabled: bool = True
+    heartbeat_url: SecretStr | None = Field(default=None, exclude=True)
+    heartbeat_interval_seconds: int = Field(default=60, ge=30, le=3600)
     workers: int = Field(default=2, ge=1, le=16)
     poll_seconds: float = Field(default=1, ge=0.05, le=30)
     run_timeout_seconds: float = Field(default=180, ge=1, le=3600)

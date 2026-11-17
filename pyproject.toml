@@ -45,6 +45,8 @@ py-modules = [
   "boox_sync_cli",
   "booxdrop_cli",
   "paperflow_http",
+  "paperflow_build",
+  "paperflow_heartbeat",
   "paperflow_api",
   "paperflow_api_client",
   "paperflow_curation",

@@ -31,6 +31,14 @@ RUN uv sync --locked --no-dev
 
 RUN useradd --uid 1000 --user-group --create-home flow
 
+ARG BUILD_COMMIT=unknown
+ARG BUILD_TIME=unknown
+ARG BUILD_CHANNEL=local
+ENV PAPERFLOW_BUILD_COMMIT=$BUILD_COMMIT \
+    PAPERFLOW_BUILD_TIME=$BUILD_TIME \
+    PAPERFLOW_BUILD_CHANNEL=$BUILD_CHANNEL
+LABEL org.opencontainers.image.revision=$BUILD_COMMIT
+
 USER 1000:1000
 WORKDIR /data
 EXPOSE 8000

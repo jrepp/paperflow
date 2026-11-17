@@ -52,3 +52,27 @@ explicitly disables the link. HTTP(S) URLs and root-relative paths are supported
 credentials, executable URL schemes, and protocol-relative URLs are rejected.
 The URL is included in the public HTML, so do not supply a private endpoint or
 credentials unless that endpoint is intentionally public information.
+
+
+## Validated nightly and release bundles
+
+The Deployable release workflow runs at 09:23 UTC each night, on published
+`vX.Y.Z` releases, and on manual dispatch. It runs the complete validation workflow
+(including browser, packaging, and Docker integration checks) against the exact
+commit before building a Linux amd64 container. A real HTTP smoke test checks
+readiness and `/api/version` before publication.
+
+Each release provides `paperflow-image.tar.gz` and `deployment.json`. The latter
+records the commit, version, build time, channel, image ID, and archive SHA-256.
+The descriptor is uploaded last; consumers must require both files, verify the
+archive, and check the running commit and health after activation. Nightly bundles
+use unique prerelease tags; published version tags are never moved. Failed
+validation leaves the previous deployment available. GitHub cron delivery can be
+delayed; it is not an exact wall-clock guarantee.
+
+Host polling, private URLs, credentials, service units, retention, rollback, and
+activation policy belong in external deployment configuration. No CI runner has
+host credentials. Deployment consumers should serialize updates, warm images
+before stopping the app, drain active work, and restore the previous image if
+post-deploy health or version verification fails. Keep application data outside
+the container. Image rollback does not reverse database schema migrations.

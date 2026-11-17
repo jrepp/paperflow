@@ -64,6 +64,11 @@ class IntegrationMonitor:
         self._next_assistant_at = 0
         self.assistant_error = None
         self.last_assistant_run = None
+        self._heartbeat_pool = None
+        self._heartbeat_future = None
+        self._next_heartbeat_at = 0
+        self.heartbeat_status = {'configured': bool(settings.monitor.heartbeat_url),
+                                 'last_acknowledged_at': None, 'signal': None, 'error': None}
 
     def start(self):
         path = self.settings.storage.path.resolve()
@@ -81,6 +86,8 @@ class IntegrationMonitor:
             if self.telemetry is None:
                 self.telemetry = Telemetry(self.settings.telemetry)
             if self.settings.monitor.enabled:
+                if self.settings.monitor.heartbeat_url:
+                    self._heartbeat_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='paperflow-heartbeat')
                 if self.settings.assistant.enabled:
                     from paperflow_assistant.runtime import AssistantWorker
                     self.assistant = AssistantWorker(self.settings)
@@ -102,6 +109,8 @@ class IntegrationMonitor:
             self._pool.shutdown(wait=True)
         if self._assistant_pool:
             self._assistant_pool.shutdown(wait=True)
+        if self._heartbeat_pool:
+            self._heartbeat_pool.shutdown(wait=True)
         if self._owns_telemetry and self.telemetry:
             self.telemetry.shutdown()
         if self._lock:
@@ -155,6 +164,7 @@ class IntegrationMonitor:
                 "scheduler_running": self.accepting, "schedule_enabled": self.settings.monitor.schedule_enabled,
                 "telemetry": {"otlp_configured": bool(self.settings.telemetry.otlp_endpoint)}, "last_tick": self.last_tick,
                 "scheduler_error": self.last_error, "overdue_runs": overdue,
+                "heartbeat": dict(self.heartbeat_status),
                 "curation": {"enabled": self.settings.assistant.enabled,
                              "running": bool(self._assistant_future and not self._assistant_future.done()),
                              "last_run": self.last_assistant_run, "error": self.assistant_error},
@@ -204,7 +214,31 @@ class IntegrationMonitor:
             except Exception as exc:
                 self.last_error = type(exc).__name__
                 logger.error(json.dumps({"event": "scheduler_error", "error_type": type(exc).__name__}))
+            self._schedule_heartbeat()
             self._wake.wait(self.settings.monitor.poll_seconds)
+
+    def _schedule_heartbeat(self):
+        if not self._heartbeat_pool or self._stop.is_set():
+            return
+        if self._heartbeat_future and self._heartbeat_future.done():
+            try:
+                signal = self._heartbeat_future.result()
+                self.heartbeat_status.update(last_acknowledged_at=time.time(), signal=signal, error=None)
+            except Exception as exc:
+                self.heartbeat_status['error'] = type(exc).__name__
+            self._heartbeat_future = None
+        if self._heartbeat_future is None and time.monotonic() >= self._next_heartbeat_at:
+            self._heartbeat_future = self._heartbeat_pool.submit(self._send_heartbeat)
+            self._next_heartbeat_at = time.monotonic() + self.settings.monitor.heartbeat_interval_seconds
+
+    def _send_heartbeat(self):
+        from paperflow_heartbeat import ping
+        try:
+            healthy = self.health()['healthy']
+        except Exception:
+            healthy = False
+        ping(self.settings.monitor.heartbeat_url.get_secret_value(), healthy)
+        return 'success' if healthy else 'failure'
 
     def _run_assistant(self):
         started = time.monotonic()

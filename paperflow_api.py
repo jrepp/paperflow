@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
 
+from paperflow_build import build_info
 from paperflow_monitor import IntegrationMonitor
 from paperflow_monitor_models import CurationTrigger, MonitoredChannel, MonitorRun
 from paperflow_settings import ResearchSettings, load_research_settings
@@ -49,7 +50,8 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
                 await run_in_threadpool(publisher.close)
             await run_in_threadpool(monitor.close)
 
-    app = FastAPI(title="Paperflow", version="0.1.0", lifespan=lifespan,
+    identity = build_info()
+    app = FastAPI(title="Paperflow", version=identity["version"], lifespan=lifespan,
                   description="Local research service and integration monitor")
     if publisher:
         from paperflow_publish_api import publishing_router
@@ -119,6 +121,10 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
                 monitor.telemetry.api_bytes.record(size, labels)
                 monitor.telemetry.api_queries.record(stats["queries"], labels)
                 query_measurement.reset(token)
+
+    @app.get("/api/version", tags=["health"])
+    def running_version():
+        return identity
 
     @app.get("/health/live")
     def live():

@@ -1,0 +1,56 @@
+name: Deployable release
+on:
+  schedule:
+    - cron: '23 9 * * *'
+  release:
+    types: [published]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: paperflow-deployable
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v')
+    uses: ./.github/workflows/validate.yml
+  bundle:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Build and smoke-test exact validated commit
+        env:
+          CHANNEL: ${{ github.event_name == 'release' && 'release' || 'nightly' }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if [ "$CHANNEL" = release ]; then
+            test "$RELEASE_TAG" = "v$(cat VERSION)"
+          fi
+          python3 scripts/container_bundle.py "$CHANNEL"
+      - name: Publish immutable bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          EVENT: ${{ github.event_name }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          tag="$RELEASE_TAG"
+          if [ "$EVENT" != release ]; then
+            tag="nightly-$RUN_ID-$ATTEMPT"
+            gh release create "$tag" --target "$GITHUB_SHA" --prerelease --title "Nightly $GITHUB_SHA" --notes 'Validated container bundle. See deployment.json for exact build identity.'
+          fi
+          actual=$(gh api "repos/$GH_REPO/commits/$tag" --jq .sha)
+          test "$actual" = "$GITHUB_SHA"
+          # Upload the descriptor last: hosts ignore releases without both assets.
+          gh release upload "$tag" artifacts/container/paperflow-image.tar.gz
+          gh release upload "$tag" artifacts/container/deployment.json

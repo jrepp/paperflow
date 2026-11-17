@@ -273,3 +273,21 @@ queue or exhausted daily cap produces no new run. Completed revisions are not
 reprocessed. Poll the returned URLs for durable outcomes, quality flags, and
 estimated spend; HTTP 202 does not assert that an analysis completed or passed
 quality checks. Internal research notes remain private.
+
+
+## Build identity and external heartbeat
+
+`GET /api/version` reports the installed package version, immutable commit,
+build timestamp, and build channel. Local builds can have unknown commit/time.
+`GET /health/live` checks process liveness. `GET /health/ready` checks storage,
+scheduler freshness, overdue runs, and current ingestion/curation errors.
+
+Set `PAPERFLOW_MONITOR__HEARTBEAT_URL` in private runtime configuration to enable
+Healthchecks-compatible POST pings. The monitor sends an empty success ping when
+ready or a `/fail` ping when unhealthy, every 60 seconds by default. Configure the
+external check for a one-minute period with suitable startup/deployment grace.
+The URL is a secret and is excluded from settings serialization and health output.
+A dedicated worker bounds requests to five seconds; network failures do not block
+curation or ingestion. Redirects are rejected. Readiness includes the last
+acknowledged heartbeat time, signal, and sanitized error type. Stalled or stopped
+monitors stop pinging. Quality estimates remain separate from process health.
