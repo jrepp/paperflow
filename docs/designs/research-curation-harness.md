@@ -196,9 +196,18 @@ An expensive cycle can take longer than its configured interval. The daily limit
 includes retries. Change `evaluation_sample_rate` to trade evaluation coverage
 against overhead, and compare quality estimates before reducing that coverage.
 
-The worker uses available source revisions. It does not claim full-paper coverage
-when ingestion supplied only an excerpt. Full-text extraction remains in the
-existing library pipeline. Historical search currently indexes source revisions.
+The worker prioritizes the same balanced list of recent items selected for static
+publication. Before model work, it attempts bounded public content retrieval for
+one visible item per cycle, including items without a feed excerpt. Article/main
+HTML is extracted without navigation or scripts; arXiv links prefer paper HTML
+and fall back to PDF when unavailable. PDF extraction is limited to 100 pages.
+Retrieved content is stored as an immutable revision, so model citations refer
+to the text actually read. Generic article HTML remains labeled excerpt because
+markup alone cannot establish complete access. Missing or inaccessible content
+preserves the original evidence and receives a one-day fetch cooldown. Content
+retrieval respects the daily model-attempt budget. Superseded source revisions
+are not selected for new model attempts. Static builds remain read-only and do
+not fetch content or call models. Historical search currently indexes source revisions.
 Semantic search and a cross-record index of claims and summaries remain future work.
 
 ## Curator system prompt

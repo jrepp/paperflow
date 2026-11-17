@@ -373,13 +373,48 @@ class AssistantWorker:
         self.store.initialize()
         self.store.recover()
 
+    def publication_priority(self):
+        from paperflow_publish_site import publication_sections, _balanced
+        from paperflow_ingest_models import SourceObservation
+        from paperflow_assistant.content import source_revision
+        with self.storage.transaction() as repo:
+            items = list(dict.fromkeys(item.id for _, item in _balanced(publication_sections(repo))))
+            candidates = []
+            from paperflow_domain import Item
+            for item_id in items:
+                item = repo.get(Item, item_id)
+                revision = repo.latest_for_item(ContentRevision, item_id)
+                observation = repo.latest_for_item(SourceObservation, item_id)
+                candidates.append((item, revision, observation))
+        fetched = False
+        priority = []
+        for item, revision, observation in candidates:
+            if (not fetched and item.kind in ('paper', 'article', 'discussion')
+                    and (revision is None or (revision.evidence_basis != 'full_text'
+                         and revision.processor_version != 'public-content-v1'))
+                    and self.store.reserve_content_fetch(item.id, self.settings.daily_attempt_limit)):
+                url = str(observation.entry.url if observation else item.canonical_url or '')
+                if url:
+                    fetched = True
+                    try:
+                        enriched = source_revision(item, url)
+                        if revision is None or len(enriched.markdown) > len(revision.markdown):
+                            with self.storage.transaction(write=True) as repo:
+                                revision = repo.add(enriched)
+                    except (OSError, ValueError):
+                        logger.info(json.dumps({'event': 'curation.content.unavailable', 'item_id': str(item.id)}))
+            if revision:
+                priority.append(str(revision.id))
+        return priority
+
     def tick(self):
+        priority = self.publication_priority()
         # Catch up the historical index before prioritizing fresh model work.
         # Bound backfill per monitor tick so very large libraries remain responsive.
         for _ in range(50):
             if self.store.reconcile(self.storage, fingerprint(self.settings)) < 200:
                 break
-        job = self.store.claim(self.settings.max_attempts, self.settings.daily_attempt_limit)
+        job = self.store.claim(self.settings.max_attempts, self.settings.daily_attempt_limit, priority)
         if job is None:
             return None
         start = time.monotonic()

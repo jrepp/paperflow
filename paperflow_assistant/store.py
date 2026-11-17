@@ -84,7 +84,7 @@ class AssistantStore:
                              (key, doc[0], fingerprint, time.time(), time.time()))
         return len(rows)
 
-    def claim(self, max_attempts, daily_attempt_limit=100):
+    def claim(self, max_attempts, daily_attempt_limit=100, priority_revisions=()):
         with self.connection(True) as conn:
             today = datetime.now(UTC).date().isoformat()
             daily = conn.execute("SELECT value FROM assistant_meta WHERE key=?", ('attempts:'+today,)).fetchone()
@@ -92,10 +92,14 @@ class AssistantStore:
             if count >= daily_attempt_limit:
                 return None
             conn.execute("UPDATE assistant_jobs SET status='failed',error='AttemptsExhausted' WHERE status='queued' AND attempts>=?", (max_attempts,))
+            priority = {str(rev): rank for rank, rev in enumerate(priority_revisions)}
+            conn.create_function('publication_rank', 1, lambda rev: priority.get(rev, len(priority)))
             row = conn.execute("""SELECT j.* FROM assistant_jobs j
                 JOIN assistant_documents d ON d.revision_id=j.revision_id
                 WHERE j.status='queued' AND j.available_at<=?
-                ORDER BY json_extract(d.revision,'$.created_at') DESC,j.queued_at,j.id LIMIT 1""", (time.time(),)).fetchone()
+                AND NOT EXISTS (SELECT 1 FROM assistant_documents newer
+                    WHERE newer.item_id=d.item_id AND newer.rowid>d.rowid)
+                ORDER BY publication_rank(j.revision_id),json_extract(d.revision,'$.created_at') DESC,j.queued_at,j.id LIMIT 1""", (time.time(),)).fetchone()
             if row is None:
                 return None
             conn.execute("INSERT OR REPLACE INTO assistant_meta VALUES (?,?)", ('attempts:'+today, str(count+1)))
@@ -103,6 +107,20 @@ class AssistantStore:
             conn.execute("INSERT INTO assistant_attempts (job_id,attempt,status,started_at) VALUES (?,?,'running',?)",
                          (row['id'], row['attempts']+1, time.time()))
             return dict(conn.execute("SELECT * FROM assistant_jobs WHERE id=?", (row['id'],)).fetchone())
+
+    def reserve_content_fetch(self, item_id, daily_attempt_limit):
+        """Persist a cooldown so inaccessible sources cannot monopolize the worker."""
+        with self.connection(True) as conn:
+            today = datetime.now(UTC).date().isoformat()
+            daily = conn.execute("SELECT value FROM assistant_meta WHERE key=?", ('attempts:'+today,)).fetchone()
+            if daily and int(daily[0]) >= daily_attempt_limit:
+                return False
+            key = 'content-fetch:' + str(item_id)
+            row = conn.execute("SELECT value FROM assistant_meta WHERE key=?", (key,)).fetchone()
+            if row and float(row[0]) > time.time() - 86400:
+                return False
+            conn.execute("INSERT OR REPLACE INTO assistant_meta VALUES (?,?)", (key, str(time.time())))
+            return True
 
     def document(self, revision_id):
         with self.connection() as conn:

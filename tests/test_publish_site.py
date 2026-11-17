@@ -200,6 +200,7 @@ def test_published_curation_includes_stats_and_complete_markdown(tmp_path):
 
     out, storage, assistant, item = _curated_site(tmp_path)
     page = (out / 'index.html').read_text()
+    assert page.index('A model summary &lt;img') < page.index('<details class="curation-card">')
     assert '<details class="curation-card">' in page
     assert '<details class="curation-card" open' not in page
     assert '<dt>Score</dt><dd>0</dd>' in page
@@ -229,7 +230,7 @@ def test_missing_curation_does_not_mislabel_source_excerpt(tmp_path):
     build_site_from_storage(storage, out)
     page = (out / 'index.html').read_text()
     assert 'No model curation available yet.' in page
-    assert 'Model summary' not in page
+    assert 'Model analysis' not in page
     assert 'Read curation Markdown' not in page
 
 
@@ -245,7 +246,7 @@ def test_cli_and_api_publish_the_configured_public_analysis(tmp_path):
     config.write_text(f'research:\n  storage:\n    path: {storage.settings.path}\n'
                       f'  assistant:\n    enabled: true\n    path: {assistant.path}\n')
     build_site(str(config), out)
-    assert 'Model summary' in (out / 'index.html').read_text()
+    assert 'Model analysis' in (out / 'index.html').read_text()
 
     token = tmp_path / 'token'
     token.write_text('test-build-token-' * 3)
@@ -262,7 +263,7 @@ def test_cli_and_api_publish_the_configured_public_analysis(tmp_path):
             time.sleep(.01)
         assert job['status'] == 'succeeded'
         page = (settings.publishing.releases_dir/job['release_id']/'index.html').read_text()
-        assert 'Model summary' in page
+        assert 'Model analysis' in page
         assert 'Read curation Markdown' in page
 
 
