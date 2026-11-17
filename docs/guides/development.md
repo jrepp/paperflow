@@ -219,3 +219,24 @@ Host-side consumers verify bundle checksums, preflight the image, check running
 identity/readiness, and roll back failed activation. Static publication uses an
 atomic switch after build and digest verification. These controls and host
 credentials remain in the external deployment repository.
+
+### Auditing repository settings
+
+The desired main ruleset is versioned in `.github/main-ruleset.json`. Compare it
+with `gh api repos/jrepp/paperflow/rulesets`, then inspect the returned ruleset ID.
+After reviewing changes, apply that file with the GitHub rulesets PUT endpoint.
+The Mergify and GitHub Actions integration IDs in it identify the specific apps;
+queue check conditions likewise name `@github-actions` to prevent a similarly
+named check from another integration satisfying the gate.
+
+Verify that Mergify has repository access and that both Merge Queue and Workflow
+Automation are enabled in its dashboard. GitHub Actions should remain enabled,
+require SHA-pinned actions, and use read-only default workflow permissions.
+GitHub's native auto-merge is disabled: Mergify is responsible for merging.
+The merge-queue configuration's source of truth is `.mergify.yml`; do not edit
+queue settings independently in the dashboard without reconciling the file.
+
+To hold a ready PR, add `do-not-merge`; remove it to let the queue reconsider it.
+For failed speculative CI, fix the underlying failure and push the correction
+instead of bypassing the rule. If deployment fails after merge, preserve the
+host's rollback state and inspect its health and identity checks before retrying.

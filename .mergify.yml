@@ -12,11 +12,11 @@ queue_rules:
       - -draft
       - label!=do-not-merge
       - label!=work-in-progress
-      - check-success=PR Status Check
+      - check-success=@github-actions/PR Status Check
       - "#approved-reviews-by>=1"
       - "#changes-requested-reviews-by=0"
     merge_conditions:
-      - check-success=PR Status Check
+      - check-success=@github-actions/PR Status Check
       - "#approved-reviews-by>=1"
       - "#changes-requested-reviews-by=0"
       - label!=do-not-merge
@@ -33,7 +33,7 @@ pull_request_rules:
       - author=jrepp
       - base=main
       - -draft
-      - check-success=PR Status Check
+      - check-success=@github-actions/PR Status Check
       - "#changes-requested-reviews-by=0"
     actions:
       review:
@@ -47,7 +47,7 @@ pull_request_rules:
       - -draft
       - label!=do-not-merge
       - label!=work-in-progress
-      - check-success=PR Status Check
+      - check-success=@github-actions/PR Status Check
       - "#approved-reviews-by>=1"
       - "#changes-requested-reviews-by=0"
     actions:
