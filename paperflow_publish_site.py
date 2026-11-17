@@ -25,6 +25,36 @@ DEFAULT_PER_CHANNEL_LIMIT = 20
 _SCAN_LIMIT = 400
 
 
+def publication_sections(repo, *, now=None, window_hours=DEFAULT_WINDOW_HOURS,
+                         per_channel_limit=DEFAULT_PER_CHANNEL_LIMIT):
+    """Shared publication selection for rendering and model-work priority."""
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=window_hours)
+    sections = []
+    for row in repo.reader_channels():
+        name = row["channel"]
+        picked: list[tuple[datetime, object]] = []
+        stale_streak = 0
+        for item in repo.items(channel=name, limit=200):
+            when = item.published_at or item.created_at
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            if when < cutoff:
+                stale_streak += 1
+                if stale_streak >= 10:
+                    break
+                continue
+            stale_streak = 0
+            picked.append((when, item))
+            if len(picked) >= per_channel_limit:
+                break
+        if picked:
+            picked.sort(key=lambda pair: pair[0], reverse=True)
+            sections.append({"name": name, "items": picked})
+    sections.sort(key=lambda section: section["name"])
+    return sections
+
+
 def build_site(config_path: str, out_dir: str | Path, *, window_hours: int = DEFAULT_WINDOW_HOURS,
                per_channel_limit: int = DEFAULT_PER_CHANNEL_LIMIT, now: datetime | None = None,
                workspace_url: str | None = None) -> dict:
@@ -49,39 +79,19 @@ def build_site_from_storage(storage: SQLiteResearchStorage, out_dir: str | Path,
     if not 1 <= per_channel_limit <= 200:
         raise ValueError("per_channel_limit outside 1..200")
     now = now or datetime.now(timezone.utc)
-    cutoff = now - timedelta(hours=window_hours)
-    sections: list[dict] = []
     cards = {}
     with storage.transaction() as repo:
-        for row in repo.reader_channels():
-            name = row["channel"]
-            picked: list[tuple[datetime, object]] = []
-            stale_streak = 0
-            for item in repo.items(channel=name, limit=200):
-                when = item.published_at or item.created_at
-                if when.tzinfo is None:
-                    when = when.replace(tzinfo=timezone.utc)
-                if when < cutoff:
-                    stale_streak += 1
-                    if stale_streak >= 10:
-                        break
-                    continue
-                stale_streak = 0
-                picked.append((when, item))
-                if item.id not in cards:
-                    revision = repo.latest_for_item(ContentRevision, item.id)
-                    result = assistant_store.analysis(item.id) if assistant_store else None
-                    cards[item.id] = {
-                        "observation": repo.latest_for_item(SourceObservation, item.id),
-                        "result": result,
-                        "stale": bool(result and revision and str(revision.id) != result["revision_id"]),
-                    }
-                if len(picked) >= per_channel_limit:
-                    break
-            if picked:
-                picked.sort(key=lambda pair: pair[0], reverse=True)
-                sections.append({"name": name, "items": picked})
-    sections.sort(key=lambda section: section["name"])
+        sections = publication_sections(repo, now=now, window_hours=window_hours,
+                                        per_channel_limit=per_channel_limit)
+        for section in sections:
+            for _, item in section["items"]:
+                revision = repo.latest_for_item(ContentRevision, item.id)
+                result = assistant_store.analysis(item.id) if assistant_store else None
+                cards[item.id] = {
+                    "observation": repo.latest_for_item(SourceObservation, item.id),
+                    "result": result,
+                    "stale": bool(result and revision and str(revision.id) != result["revision_id"]),
+                }
     build_id = now.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     manifest = {
         "build_id": build_id,
@@ -156,14 +166,18 @@ def _card(item, card):
             links.append(f'<a href="{esc(str(entry.discussion_url))}">Discussion</a>')
         if entry.url != item.canonical_url:
             links.append(f'<a href="{esc(str(entry.url))}">Source entry</a>')
-    parts = ['<details class="curation-card"><summary aria-label="Curation &amp; details for '
+    parts = []
+    if result:
+        if card.get('stale'):
+            parts.append('<p class="muted">This curation describes an earlier source revision.</p>')
+        parts.append('<div class="model-summary"><h3>Model analysis</h3><p>'
+                     + esc(result['analysis']['summary']) + '</p><p class="muted">Evidence: '
+                     + esc(result['analysis']['evidence_basis'].replace('_', ' ')) + '</p></div>')
+    parts += ['<details class="curation-card"><summary aria-label="Curation &amp; details for '
              + esc(item.title) + '">Curation &amp; details</summary><div class="curation-body">']
     if result:
         analysis = result["analysis"]
         metadata.extend([("Category", analysis["category"]), ("Evidence", analysis["evidence_basis"].replace('_', ' '))])
-        parts.append('<h3>Model summary</h3><p>' + esc(analysis["summary"]) + '</p>')
-        if card.get("stale"):
-            parts.append('<p class="muted">This curation describes an earlier source revision.</p>')
         parts.append('<h3>Findings</h3><ul>')
         for finding in analysis["findings"]:
             parts.append('<li>' + esc(finding["statement"]) + '<p class="muted">'
