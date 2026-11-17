@@ -95,3 +95,13 @@ def test_superseded_excerpt_is_not_claimed_after_content_arrives(tmp_path):
     worker.store.reconcile(storage, fingerprint(settings.assistant))
     assert worker.store.claim(3)['revision_id'] == str(full.id)
     assert worker.store.claim(3) is None
+
+
+def test_connection_checks_the_address_actually_used(monkeypatch):
+    import socket
+    from paperflow_assistant.content import public_connection
+    monkeypatch.setattr(socket, 'getaddrinfo', lambda *a, **k: [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('127.0.0.1', 80))])
+    monkeypatch.setattr(socket, 'socket', lambda *a: pytest.fail('Private address must never be connected'))
+    with pytest.raises(ValueError):
+        public_connection(('source.example', 80))

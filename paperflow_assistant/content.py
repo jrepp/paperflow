@@ -1,9 +1,10 @@
 """Bounded public source retrieval for visible curation candidates."""
 from html.parser import HTMLParser
 import ipaddress
+import http.client
 import socket
 from urllib.parse import urlsplit
-from urllib.request import Request, HTTPRedirectHandler, build_opener
+from urllib.request import Request, HTTPRedirectHandler, HTTPHandler, HTTPSHandler, ProxyHandler, build_opener
 
 from paperflow_domain import ContentRevision
 
@@ -23,10 +24,50 @@ class PublicRedirect(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def public_connection(address, timeout=20, source_address=None):
+    # Validate and connect to the same resolved address. A second DNS lookup
+    # after validation would let a source redirect the request to private hosts.
+    host, port = address
+    addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    if not addresses or any(not ipaddress.ip_address(row[4][0]).is_global for row in addresses):
+        raise ValueError('Content address is not public')
+    error = None
+    for family, kind, protocol, _, sockaddr in addresses:
+        sock = socket.socket(family, kind, protocol)
+        try:
+            sock.settimeout(timeout)
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(sockaddr)
+            return sock
+        except OSError as exc:
+            error = exc
+            sock.close()
+    raise error or OSError('No public content address')
+
+
+class PublicHTTPHandler(HTTPHandler):
+    def http_open(self, req):
+        def connection(*args, **kwargs):
+            conn = http.client.HTTPConnection(*args, **kwargs)
+            conn._create_connection = public_connection
+            return conn
+        return self.do_open(connection, req)
+
+
+class PublicHTTPSHandler(HTTPSHandler):
+    def https_open(self, req):
+        def connection(*args, **kwargs):
+            conn = http.client.HTTPSConnection(*args, **kwargs)
+            conn._create_connection = public_connection
+            return conn
+        return self.do_open(connection, req, context=self._context)
+
+
 def fetch(url):
     public_url(url)
     request = Request(url, headers={'User-Agent': 'Paperflow/0.1 (research content extraction)'})
-    with build_opener(PublicRedirect()).open(request, timeout=20) as response:
+    with build_opener(ProxyHandler({}), PublicHTTPHandler(), PublicHTTPSHandler(), PublicRedirect()).open(request, timeout=20) as response:
         body = response.read(8 * 1024 * 1024 + 1)
     if len(body) > 8 * 1024 * 1024:
         raise ValueError('Source exceeds content size limit')
