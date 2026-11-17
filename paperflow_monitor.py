@@ -45,6 +45,9 @@ class IntegrationMonitor:
         self.telemetry = telemetry
         self._owns_telemetry = telemetry is None
         self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._curation_lock = threading.Lock()
+        self._curation_requested = False
         self._thread = None
         self._lock = None
         self._pool = None
@@ -92,6 +95,7 @@ class IntegrationMonitor:
 
     def close(self):
         self._stop.set()
+        self._wake.set()
         if self._thread:
             self._thread.join()
         if self._pool:
@@ -108,6 +112,37 @@ class IntegrationMonitor:
     @property
     def accepting(self):
         return bool(self._thread and self._thread.is_alive() and not self._stop.is_set())
+
+    def trigger_curation(self):
+        """Wake one bounded cycle; duplicate triggers share pending or active work."""
+        with self._curation_lock:
+            if not self.accepting or not self.assistant:
+                raise RuntimeError('Curation is disabled or the monitor is stopping')
+            running = bool(self._assistant_future and not self._assistant_future.done())
+            coalesced = running or self._curation_requested
+            if not running:
+                self._curation_requested = True
+            self._wake.set()
+            return {'status': 'running' if running else 'requested', 'coalesced': coalesced,
+                    'runs_url': '/api/monitor/curation/runs',
+                    'metrics_url': '/api/monitor/curation'}
+
+    def _schedule_assistant(self):
+        with self._curation_lock:
+            if self._assistant_future and self._assistant_future.done():
+                try:
+                    result = self._assistant_future.result()
+                    if result:
+                        self.last_assistant_run = result['id']
+                        self.assistant_error = result.get('error')
+                except Exception as exc:
+                    self.assistant_error = type(exc).__name__
+                self._assistant_future = None
+            due = self.settings.monitor.schedule_enabled and time.time() >= self._next_assistant_at
+            if self.assistant and self._assistant_future is None and not self._stop.is_set() and (due or self._curation_requested):
+                self._assistant_future = self._assistant_pool.submit(self._run_assistant)
+                self._curation_requested = False
+                self._next_assistant_at = time.time() + self.settings.assistant.interval_seconds
 
     def health(self):
         overdue = [str(run.id) for run in self.store.running()
@@ -128,20 +163,9 @@ class IntegrationMonitor:
 
     def _loop(self):
         while not self._stop.is_set():
+            self._wake.clear()
             try:
-                if self._assistant_future and self._assistant_future.done():
-                    try:
-                        result = self._assistant_future.result()
-                        if result:
-                            self.last_assistant_run = result['id']
-                            self.assistant_error = result.get('error')
-                    except Exception as exc:
-                        self.assistant_error = type(exc).__name__
-                    self._assistant_future = None
-                if (self.assistant and self.settings.monitor.schedule_enabled and self._assistant_future is None
-                    and time.time() >= self._next_assistant_at):
-                    self._assistant_future = self._assistant_pool.submit(self._run_assistant)
-                    self._next_assistant_at = time.time() + self.settings.assistant.interval_seconds
+                self._schedule_assistant()
                 if self._topic_future and self._topic_future.done():
                     try:
                         self.last_topic_run=str(self._topic_future.result().id)
@@ -180,7 +204,7 @@ class IntegrationMonitor:
             except Exception as exc:
                 self.last_error = type(exc).__name__
                 logger.error(json.dumps({"event": "scheduler_error", "error_type": type(exc).__name__}))
-            self._stop.wait(self.settings.monitor.poll_seconds)
+            self._wake.wait(self.settings.monitor.poll_seconds)
 
     def _run_assistant(self):
         started = time.monotonic()

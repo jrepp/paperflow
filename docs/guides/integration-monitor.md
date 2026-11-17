@@ -93,6 +93,9 @@ Comment samples and HTTP response-size limits remain bounded independently.
 | --- | --- |
 | `GET /health/live` | Process liveness |
 | `GET /health/ready` | Scheduler freshness, database availability, overdue runs; 503 if unhealthy |
+| `POST /api/monitor/curation/runs` | Wake one bounded curation cycle; coalesce pending/active triggers; 202 |
+| `GET /api/monitor/curation/runs` | Recent curation outcomes and validation receipts |
+| `GET /api/monitor/curation` | Activity, sampled quality, token usage, and estimated spend |
 | `GET /api/monitor/channels` | Schedule, pause state, freshness, consecutive failures, active/latest run |
 | `POST /api/monitor/channels/{channel}/runs` | Queue a run, or return the existing active run; 202 |
 | `PATCH /api/monitor/channels/{channel}` | `{"paused": true}` or `{"paused": false}` |
@@ -241,3 +244,32 @@ HTTP telemetry also measures research SQL statement counts, response body bytes,
 and response-ready latency through `paperflow.api.db.queries`,
 `paperflow.api.response.size`, and `paperflow.api.duration`. These metrics remain
 available in API-only mode. Research query counts do not include MonitorStore SQL.
+
+
+## Agent-triggered research curation
+
+Agents can discover `trigger_curation` in `/openapi.json` or `/docs` and request
+one cycle without restarting the service:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/monitor/curation/runs
+curl http://127.0.0.1:8000/api/monitor/curation/runs
+curl 'http://127.0.0.1:8000/api/monitor/curation?days=7&planned_items_per_day=50'
+```
+
+The POST returns HTTP 202 with `status` (`requested` or `running`), `coalesced`,
+`runs_url`, and `metrics_url`. It wakes the monitor immediately, including when
+`monitor.schedule_enabled` is false. The monitor and assistant must both be
+running; otherwise it returns HTTP 503. The endpoint uses the same trusted-local
+access boundary as other monitor controls. Keep it behind the deployment's
+private network or authenticated gateway.
+
+This is an in-memory wake-up, not a durable job receipt. A restart can discard a
+pending wake-up; agents may safely retry. Repeated requests share pending or active
+work and never create concurrent curator workers or queue extra cycles behind an
+active cycle. No SIGHUP handler is installed. The configured `items_per_cycle`,
+daily attempt cap, model budgets, and retry backoff still apply. An empty eligible
+queue or exhausted daily cap produces no new run. Completed revisions are not
+reprocessed. Poll the returned URLs for durable outcomes, quality flags, and
+estimated spend; HTTP 202 does not assert that an analysis completed or passed
+quality checks. Internal research notes remain private.

@@ -314,3 +314,53 @@ def test_static_publication_does_not_include_internal_memory(tmp_path):
     destination = tmp_path/'published'
     build_site_from_storage(storage, destination)
     assert all('PRIVATE-MEMORY-CANARY' not in p.read_text() for p in destination.iterdir())
+
+
+def test_agent_trigger_wakes_manual_monitor_and_coalesces(tmp_path, monkeypatch):
+    import threading
+    import paperflow_assistant.runtime as runtime
+    settings, storage, item, rev, output = fixture(tmp_path)
+    settings.monitor.poll_seconds = 30
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    def blocked(ctx, item):
+        calls.append(ctx.job['id'])
+        entered.set()
+        assert release.wait(5)
+        return runner(output)(ctx, item)
+    original = runtime.AssistantWorker
+    monkeypatch.setattr(runtime, 'AssistantWorker', lambda s: original(s, runner=blocked))
+    monitor = IntegrationMonitor(settings)
+    with TestClient(create_app(settings, monitor=monitor)) as client:
+        try:
+            response = client.post('/api/monitor/curation/runs')
+            assert response.status_code == 202
+            assert response.json()['status'] == 'requested'
+            assert not response.json()['coalesced']
+            assert entered.wait(2), 'Manual trigger must wake the long poll immediately'
+            for _ in range(3):
+                duplicate = client.post('/api/monitor/curation/runs').json()
+                assert duplicate['coalesced'] and duplicate['status'] == 'running'
+                assert client.get(duplicate['metrics_url']).status_code == 200
+                assert client.get(duplicate['runs_url']).status_code == 200
+            assert len(calls) == 1
+            assert not monitor._curation_requested
+            schema = client.get('/openapi.json').json()
+            assert schema['paths']['/api/monitor/curation/runs']['post']['operationId'] == 'trigger_curation'
+        finally:
+            release.set()
+
+
+def test_trigger_coalesces_pending_requests_and_rejects_unavailable(tmp_path, monkeypatch):
+    settings, *_ = fixture(tmp_path)
+    monitor = IntegrationMonitor(settings)
+    with pytest.raises(RuntimeError):
+        monitor.trigger_curation()
+    monkeypatch.setattr(IntegrationMonitor, 'accepting', property(lambda self: True))
+    monitor.assistant = object()
+    assert not monitor.trigger_curation()['coalesced']
+    assert monitor.trigger_curation()['coalesced']
+    assert monitor._wake.is_set()
+    settings.assistant.enabled = False
+    with TestClient(create_app(settings)) as client:
+        assert client.post('/api/monitor/curation/runs').status_code == 503

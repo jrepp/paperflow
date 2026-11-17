@@ -7,6 +7,14 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict
 RunStatus = Literal["queued", "running", "succeeded", "degraded", "failed", "interrupted"]
 
 
+class CurationTrigger(BaseModel):
+    """Acknowledges a cycle wake-up, not a completed analysis or durable job."""
+    status: Literal['requested', 'running']
+    coalesced: bool
+    runs_url: str
+    metrics_url: str
+
+
 class MonitorRun(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
     id: UUID

@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
 
 from paperflow_monitor import IntegrationMonitor
-from paperflow_monitor_models import MonitoredChannel, MonitorRun
+from paperflow_monitor_models import CurationTrigger, MonitoredChannel, MonitorRun
 from paperflow_settings import ResearchSettings, load_research_settings
 from paperflow_curation import CurationService, NotFoundError
 from paperflow_curation_api import curation_router
@@ -161,6 +161,20 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
                 "schedule": {"interval_seconds": settings.assistant.interval_seconds,
                              "items_per_cycle": settings.assistant.items_per_cycle,
                              "daily_attempt_limit": settings.assistant.daily_attempt_limit}}
+
+    @app.post('/api/monitor/curation/runs', response_model=CurationTrigger, status_code=202,
+              operation_id='trigger_curation', tags=['curation'],
+              summary='Trigger a bounded curation cycle',
+              description='Wake the curator even when automatic scheduling is off. Repeated requests '
+              'coalesce with pending or active work. Retry backoff, daily attempt limits, and per-cycle '
+              'intake still apply. This is an in-memory wake-up, not a durable job receipt. '
+              'Poll the returned run-history and metrics URLs for outcomes and spend. '
+              'An empty queue or exhausted daily budget may produce no new run.')
+    def trigger_curation():
+        try:
+            return monitor.trigger_curation()
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from None
 
     @app.get("/api/monitor/curation/runs")
     def curation_runs(limit: int = Query(default=20, ge=1, le=100)):
