@@ -30,14 +30,26 @@ Internal memory uses a separate index and access path.
 
 ## Provider research
 
-Provider documentation was checked on November 17, 2026. The requested reasoning
-provider is the direct `deepseek.us` service. Its exact API base URL and model ID
-remain unverified. Do not substitute another provider or send credentials to a
-guessed endpoint. Deployment supplies credentials and provider configuration.
+Provider documentation was checked on November 17, 2026. The supplied API guide
+selects DeepSeek's direct service at `https://api.deepseek.com`, replacing the
+earlier `deepseek.us` reference. This selection does not establish US-only hosting.
+Deployment supplies credentials and provider configuration.
 
-DeepSeek's separate official service documents `deepseek-flash`, currently served
-by V4.1 Flash 1017, and `deepseek-v4-pro`. These names do not establish the model
-catalog for `deepseek.us`. See the
+Use the OpenAI-compatible Chat Completions API with these settings:
+
+| Setting | Value |
+| --- | --- |
+| Base URL | `https://api.deepseek.com` |
+| Request endpoint | `POST /chat/completions` |
+| Model | `deepseek-flash` |
+| Thinking | `{"type": "enabled"}` |
+| Reasoning effort | `high` |
+
+The model alias currently resolves to DeepSeek-V4.1-Flash-1017. Record the requested
+model and returned model identifier for each run. Do not assume that the alias pins
+a checkpoint. The service also offers `deepseek-v4-pro`, but it is not the selected
+default. Use Pydantic AI's DeepSeek provider and model settings to preserve thinking
+content across tool calls. Keep credentials out of prompts and run records. See the
 [DeepSeek API guide](https://api-docs.deepseek.com/).
 
 TypeSafe documents `POST https://api.typesafe.ai/v1/systemone` and model
