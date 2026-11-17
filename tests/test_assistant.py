@@ -391,6 +391,10 @@ def test_budget_failure_has_exact_limit_and_persisted_diagnostics(tmp_path, capl
     assert diagnostics['queue_blocked_reason'] == 'retry_backoff'
     assert 'curation.attempt.failed' in caplog.text
     assert '130525' in caplog.text
+    monitor = IntegrationMonitor(settings)
+    with TestClient(create_app(settings, monitor=monitor)) as client:
+        assert client.get('/health/curation').json()['failure']['observed'] == 130525
+        assert client.get('/health/ready').status_code == 200
 
 
 def test_request_budget_is_projected_and_unknown_error_text_is_never_logged(tmp_path, caplog):

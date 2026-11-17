@@ -288,6 +288,20 @@ class AssistantStore:
             result.append(value)
         return result
 
+    def latest_outcome(self):
+        with self.connection() as conn:
+            row = conn.execute("SELECT job_id,status,error,usage FROM assistant_attempts WHERE status IN ('failed','succeeded') ORDER BY finished_at DESC LIMIT 1").fetchone()
+        if row is None:
+            return None
+        usage = json.loads(row['usage'] or '{}')
+        error = row['error'] if row['status'] == 'failed' else None
+        detail = usage.get('failure')
+        if error and detail is None:
+            detail = {'error_type': error, 'category': 'budget' if error in {'UsageLimitExceeded', 'OutputTokenLimitExceeded'} else 'execution',
+                      'phase': 'unknown', 'limit': None, 'configured_limit': None,
+                      'observed': None, 'measurement': 'not_recorded'}
+        return {'id': row['job_id'], 'error': error, 'failure': detail}
+
     def diagnostics(self, settings):
         now = time.time()
         today = datetime.fromtimestamp(now, UTC).date().isoformat()

@@ -94,6 +94,11 @@ class IntegrationMonitor:
                     from paperflow_assistant.runtime import AssistantWorker
                     self.assistant = AssistantWorker(self.settings)
                     self.assistant.initialize()
+                    previous = self.assistant.store.latest_outcome()
+                    if previous:
+                        self.last_assistant_run = previous['id']
+                        self.assistant_error = previous['error']
+                        self.assistant_failure = previous['failure']
                     self._assistant_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="paperflow-curator")
                 self._pool = ThreadPoolExecutor(max_workers=self.settings.monitor.workers, thread_name_prefix="paperflow-ingest")
                 self._thread = threading.Thread(target=self._loop, name="paperflow-monitor", daemon=True)
