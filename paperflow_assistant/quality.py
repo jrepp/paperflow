@@ -4,7 +4,7 @@ import re
 
 from paperflow_domain import ContentRevision
 
-EVALUATOR_VERSION = "curation-evidence-v1"
+EVALUATOR_VERSION = "curation-evidence-v2"
 
 
 def citations(analysis):

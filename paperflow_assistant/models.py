@@ -116,10 +116,10 @@ class Judgment(StrictModel):
 
 class QualityJudgment(StrictModel):
     """Audit the supplied analysis against source text, independently of the curator."""
-    factual_support: bool = Field(description="Factual claims and summary agree with the cited source text.")
+    factual_support: bool = Field(description="Every factual claim in the summary, findings, and bias assessments is supported by the supplied source. Return false for any invented number, motive, source layout, claim placement, or omission that the source does not establish.")
     evidence_limits: bool = Field(description="The analysis preserves the limits of excerpt, abstract, or full-text evidence.")
     uncertainty: bool = Field(description="The analysis distinguishes findings, claims, inferences, and counterfactuals.")
     causal_reasoning: bool = Field(description="Effects have defensible causal steps and assumptions, or missing effects have explicit evidence gaps.")
-    neutrality: bool = Field(description="The prose is direct and neutral, with no editorializing or rhetorical questions.")
+    neutrality: bool = Field(description="The prose is direct and neutral, with no editorializing, rhetorical questions, tool activity, bucket status, or internal collection state in the public summary.")
     coverage: bool = Field(description="The analysis captures the source's important ideas without material omissions.")
     category_fit: bool = Field(description="The category matches the content and the supplied taxonomy.")

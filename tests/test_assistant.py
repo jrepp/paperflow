@@ -262,6 +262,15 @@ def test_prompt_contains_embedded_voice_and_memory_contract():
     assert 'rhetorical questions' in PROMPT
     assert 'record_research_insight' in PROMPT
     assert 'Never change a possible outcome into a certain outcome' in PROMPT
+    assert 'bucket status' in PROMPT
+
+
+def test_reference_checks_reject_an_evaluator_that_passes_everything():
+    from paperflow_assistant.evaluation import evaluate
+    from paperflow_assistant.models import AssistantSettings, QualityJudgment
+    model = TestModel(custom_output_args={key: True for key in QualityJudgment.model_fields})
+    report = asyncio.run(evaluate(AssistantSettings(), model=model))
+    assert report['passed'] == 1 and report['total'] == 3
 
 
 def test_decision_tool_enforces_parent_ids_depth_and_audits(tmp_path):

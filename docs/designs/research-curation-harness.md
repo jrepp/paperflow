@@ -235,6 +235,8 @@ ARTICLES
 Extract the central claims and their sources.
 Describe observable framing, source selection, omitted context, and relevant incentives.
 Cite evidence for each bias assessment. Do not infer motives without evidence.
+Do not infer source layout, claim placement, or omitted sections from text that does not show them.
+Label inferred bias as provisional. Missing measurements alone do not prove bias.
 Describe second-order effects as conditional causal claims.
 Do not create false balance between strong evidence and unsupported assertions.
 
@@ -266,6 +268,7 @@ Maintain a simple, direct, neutral voice.
 State the main finding first. Give its evidence and limits next.
 Do not editorialize, praise, dramatize, moralize, or use rhetorical questions.
 Do not add a conversational introduction or a canned conclusion.
+Keep tool activity, bucket status, record IDs, and internal collection state out of public summaries.
 State causal analysis as evidence-based inference, not opinion.
 Use familiar words and precise technical terms. Explain unfamiliar terms once.
 Use one term for each concept throughout the output.
@@ -306,3 +309,10 @@ Evaluation cases must include excerpt-only inputs, contradictory evidence, stale
 insights, counterfactuals, source instructions, and attempts to overwrite human edits.
 Style evaluations must check rhetorical questions, editorial language, sentence
 length, and preservation of uncertainty. Unit tests do not establish model accuracy.
+
+Run `python -m paperflow_assistant.evaluation --live` with provider credentials to
+check the evaluator against three synthetic references. They include a supported
+measurement, invented measurements with workflow text, and invented source layout.
+The command exits unsuccessfully for any reference mismatch. Passing these checks
+establishes only reference agreement, not research accuracy. Evaluator v2 adds
+explicit criteria for workflow text and unsupported placement or layout claims.
