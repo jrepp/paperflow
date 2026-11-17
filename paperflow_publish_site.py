@@ -13,7 +13,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from paperflow_settings import load_research_settings
+from paperflow_settings import PublishingSettings, load_research_settings
 from paperflow_storage_sqlite import SQLiteResearchStorage
 
 DEFAULT_WINDOW_HOURS = 168
@@ -22,18 +22,22 @@ _SCAN_LIMIT = 400
 
 
 def build_site(config_path: str, out_dir: str | Path, *, window_hours: int = DEFAULT_WINDOW_HOURS,
-               per_channel_limit: int = DEFAULT_PER_CHANNEL_LIMIT, now: datetime | None = None) -> dict:
+               per_channel_limit: int = DEFAULT_PER_CHANNEL_LIMIT, now: datetime | None = None,
+               workspace_url: str | None = None) -> dict:
     """Load the configured research storage and render the static bundle."""
-    settings = load_research_settings(config_path)
+    overrides = {"publishing": {"workspace_url": workspace_url}} if workspace_url is not None else {}
+    settings = load_research_settings(config_path, **overrides)
     return build_site_from_storage(SQLiteResearchStorage(settings.storage), out_dir,
-                                   window_hours=window_hours, per_channel_limit=per_channel_limit, now=now)
+                                   window_hours=window_hours, per_channel_limit=per_channel_limit, now=now,
+                                   workspace_url=settings.publishing.workspace_url)
 
 
 def build_site_from_storage(storage: SQLiteResearchStorage, out_dir: str | Path, *,
                             window_hours: int = DEFAULT_WINDOW_HOURS,
                             per_channel_limit: int = DEFAULT_PER_CHANNEL_LIMIT,
-                            now: datetime | None = None) -> dict:
+                            now: datetime | None = None, workspace_url: str | None = None) -> dict:
     """Render the published bundle from an existing research storage."""
+    workspace_url = PublishingSettings(workspace_url=workspace_url).workspace_url
     if not 1 <= window_hours <= 24 * 30:
         raise ValueError("window_hours outside 1..720")
     if not 1 <= per_channel_limit <= 200:
@@ -74,7 +78,7 @@ def build_site_from_storage(storage: SQLiteResearchStorage, out_dir: str | Path,
     }
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "index.html").write_text(_render(sections, manifest), encoding="utf-8")
+    (out / "index.html").write_text(_render(sections, manifest, workspace_url=workspace_url), encoding="utf-8")
     (out / "build.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return manifest
 
@@ -121,14 +125,14 @@ def _item_li(pair: tuple[datetime, object], now: datetime) -> str:
     return f"<li>{ref}{meta}</li>"
 
 
-def _render(sections: list[dict], manifest: dict) -> str:
+def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None = None) -> str:
     now = datetime.fromtimestamp(manifest["epoch"], tz=timezone.utc)
     esc = html.escape
     latest = _balanced(sections)
     parts = [
         "<!doctype html><meta charset=\"utf-8\">",
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
-        f"<title>Paperflow — paperflow published</title>",
+        "<title>Paperflow — published channels</title>",
         "<style>",
         "body{font:16px/1.6 system-ui,sans-serif;margin:0 auto;max-width:46rem;padding:1rem 1.25rem;color:#1a1a1a}",
         "a{color:#0a5ad6;text-decoration:none}a:hover{text-decoration:underline}",
@@ -146,8 +150,9 @@ def _render(sections: list[dict], manifest: dict) -> str:
                      + "".join(_item_li(pair, now) for pair in section["items"]) + "</ol>")
     if not latest:
         parts.append("<p>No published items inside the decay window yet.</p>")
+    workspace_link = f' · <a href="{esc(workspace_url, quote=True)}">Open workspace</a>' if workspace_url else ""
     policy = manifest["policy"]
     parts.append("<p class=\"foot\">Build " + esc(manifest["build_id"])
                  + " · window " + str(policy["window_hours"]) + "h, cap " + str(policy["per_channel_limit"])
-                 + " per channel</p>")
+                 + " per channel" + workspace_link + "</p>")
     return "\n".join(parts)

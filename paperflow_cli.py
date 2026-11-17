@@ -189,6 +189,9 @@ library_app.command("stage")(radar_cli.stage_command)
 @publish_app.command("site")
 def publish_site_command(
     config: str = typer.Option("arxiv-radar.yaml", help="Settings file selecting the research storage"),
+    workspace_url: str | None = typer.Option(
+        None, help="Optional workspace link; overrides publishing settings. Empty disables the link."
+    ),
     out: str = typer.Option("artifacts/site", help="Output directory for the static bundle"),
     window_hours: int = typer.Option(
         168, min=1, max=720, help="Decay window: items older than this leave the channels"
@@ -202,7 +205,8 @@ def publish_site_command(
 
     from paperflow_publish_site import build_site
 
-    manifest = build_site(config, out, window_hours=window_hours, per_channel_limit=per_channel_limit)
+    manifest = build_site(config, out, window_hours=window_hours, per_channel_limit=per_channel_limit,
+                          workspace_url=workspace_url)
     typer.echo(json.dumps(manifest, indent=2, sort_keys=True))
 
 

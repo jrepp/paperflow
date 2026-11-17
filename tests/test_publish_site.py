@@ -92,3 +92,62 @@ def test_site_balances_channels_and_survives_empty(tmp_path: Path) -> None:
     first_five = [entry.split("</a>")[0] for entry in order[:5]]
     assert sum(name.startswith("<a href=\"https://a.example") for name in first_five) >= 2
     assert sum(name.startswith("<a href=\"https://b.example") for name in first_five) >= 2
+
+
+def test_workspace_link_is_opt_in_and_escaped(tmp_path: Path) -> None:
+    storage = _storage(tmp_path)
+    storage.initialize()
+    out = tmp_path / "site"
+    build_site_from_storage(storage, out)
+    page = (out / "index.html").read_text()
+    assert "Open workspace" not in page
+    assert 'href="/live"' not in page
+
+    build_site_from_storage(storage, out, workspace_url='/workspace?label="reader"&mode=read')
+    page = (out / "index.html").read_text()
+    assert 'href="/workspace?label=&quot;reader&quot;&amp;mode=read">Open workspace</a>' in page
+
+
+@pytest.mark.parametrize("url", [
+    "javascript:alert(1)", "data:text/html,hello", "//reader.example.com",
+    "https://user:password@reader.example.com", "https:///missing-host",
+    "/\\reader.example.com", "https://reader.example.com/\npath",
+])
+def test_workspace_link_rejects_unsafe_urls(tmp_path: Path, url: str) -> None:
+    storage = _storage(tmp_path)
+    storage.initialize()
+    out = tmp_path / "site"
+    with pytest.raises(ValueError):
+        build_site_from_storage(storage, out, workspace_url=url)
+    assert not out.exists()
+
+
+def test_publish_cli_uses_external_settings_and_overrides(tmp_path: Path, monkeypatch) -> None:
+    from typer.testing import CliRunner
+    from paperflow_cli import app
+
+    storage = _storage(tmp_path)
+    storage.initialize()
+    config = tmp_path / "settings.yaml"
+    config.write_text(
+        f"research:\n  storage:\n    path: {storage.settings.path}\n"
+        "  publishing:\n    workspace_url: https://reader.example.com/yaml\n"
+    )
+    out = tmp_path / "site"
+    runner = CliRunner()
+    args = ["publish", "site", "--config", str(config), "--out", str(out)]
+
+    def publish(extra: list[str] | None = None) -> str:
+        result = runner.invoke(app, args + (extra or []))
+        assert result.exit_code == 0, result.output
+        return (out / "index.html").read_text()
+
+    assert 'href="https://reader.example.com/yaml"' in publish()
+    monkeypatch.setenv("PAPERFLOW_PUBLISHING__WORKSPACE_URL", "https://reader.example.com/env")
+    assert 'href="https://reader.example.com/env"' in publish()
+    assert 'href="https://reader.example.com/cli"' in publish([
+        "--workspace-url", "https://reader.example.com/cli",
+    ])
+    assert "Open workspace" not in publish(["--workspace-url", ""])
+    monkeypatch.setenv("PAPERFLOW_PUBLISHING__WORKSPACE_URL", "")
+    assert "Open workspace" not in publish()

@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from paperflow_ingest_models import IngestionSettings
 from paperflow_topic_models import TopicSettings
@@ -52,6 +53,28 @@ class TelemetrySettings(BaseModel):
     otlp_endpoint: str | None = None
 
 
+class PublishingSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_url: str | None = None
+
+    @field_validator("workspace_url")
+    @classmethod
+    def validate_workspace_url(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        if any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value) or "\\" in value:
+            raise ValueError("workspace_url must not contain whitespace or backslashes")
+        parsed = urlsplit(value)
+        if value.startswith("/") and not value.startswith("//"):
+            return value
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("workspace_url must be an HTTP(S) URL or a root-relative path")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("workspace_url must not contain credentials")
+        return value
+
+
 class ResearchSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="PAPERFLOW_", env_nested_delimiter="__", extra="forbid",
@@ -64,6 +87,7 @@ class ResearchSettings(BaseSettings):
     service: ServiceSettings = Field(default_factory=ServiceSettings)
     telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)
     topics: TopicSettings = Field(default_factory=TopicSettings)
+    publishing: PublishingSettings = Field(default_factory=PublishingSettings)
 
 
 def load_research_settings(
