@@ -369,6 +369,7 @@ def test_trigger_coalesces_pending_requests_and_rejects_unavailable(tmp_path, mo
 def test_budget_failure_has_exact_limit_and_persisted_diagnostics(tmp_path, caplog):
     from pydantic_ai.usage import UsageLimits
     settings, storage, item, rev, output = fixture(tmp_path)
+    settings.assistant.token_limit = 120000
     def exhaust(ctx, item):
         # A recovered decision-tool error must not replace the terminal failure.
         ctx.failure = {'category': 'execution', 'limit': 'stale'}

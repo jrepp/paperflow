@@ -116,7 +116,7 @@ file. Deployment must inject the selected values. Settings serialization exclude
 both key fields. Provider URLs and model IDs remain configurable.
 
 Default limits are 100 attempts per UTC day, 3 attempts per job, 12 model requests,
-40 tool calls, 120,000 reported tokens, 16,000 output tokens per reasoning request,
+40 tool calls, 200,000 reported tokens, 16,000 output tokens per reasoning request,
 12 decision calls, and 3 decision layers.
 The reasoner has a 240-second timeout. Sampled evaluation has a separate 60-second
 timeout, two-request limit, and 32,000-token budget so curation cannot consume its
