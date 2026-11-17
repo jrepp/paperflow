@@ -6,7 +6,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from paperflow_ingest_models import IngestionSettings
 from paperflow_topic_models import TopicSettings
@@ -57,6 +57,17 @@ class PublishingSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     workspace_url: str | None = None
+    build_api_enabled: bool = False
+    build_token_file: Path | None = None
+    releases_dir: Path = Path("artifacts/publish/releases")
+    build_reuse_seconds: int = Field(default=30, ge=0, le=3600)
+
+    @model_validator(mode="after")
+    def require_build_credentials(self):
+        if self.build_api_enabled and self.build_token_file is None:
+            raise ValueError("build_token_file is required when the build API is enabled")
+        return self
+
 
     @field_validator("workspace_url")
     @classmethod

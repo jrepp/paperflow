@@ -33,6 +33,7 @@ from the repository root. See the development guide for hooks, CI and release se
 - [Runbook](guides/runbook.md)
 
 - [Using the local reader](guides/local-reader.md)
+- [On-demand static publishing](guides/static-publishing.md)
 
 ## Reference
 

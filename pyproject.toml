@@ -67,6 +67,7 @@ py-modules = [
   "paperflow_periodical",
   "paperflow_publish",
   "paperflow_publish_site",
+  "paperflow_publish_api",
   "paperflow_radar",
   "paperflow_refresh",
   "paperflow_sources",

@@ -29,6 +29,10 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
     monitor = monitor or IntegrationMonitor(settings)
 
     storage = SQLiteResearchStorage(settings.storage)
+    publisher = None
+    if settings.publishing.build_api_enabled:
+        from paperflow_publish_api import BuildService
+        publisher = BuildService(storage, settings.publishing)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -41,10 +45,15 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
         try:
             yield
         finally:
+            if publisher:
+                await run_in_threadpool(publisher.close)
             await run_in_threadpool(monitor.close)
 
     app = FastAPI(title="Paperflow", version="0.1.0", lifespan=lifespan,
                   description="Local research service and integration monitor")
+    if publisher:
+        from paperflow_publish_api import publishing_router
+        app.include_router(publishing_router(publisher, settings.publishing))
     app.include_router(curation_router(CurationService(storage)))
     from paperflow_reader.api import reader_router
     from paperflow_reader.service import ReaderService
