@@ -1,3 +1,11 @@
+---
+created: 2026-06-04T21:16:46Z
+title: "Research Radar Issue 1 Draft"
+project_id: paperflow
+doc_uuid: a0dec1f0-bddc-4a3a-a795-84c1b69e6856
+tags: [periodicals]
+---
+
 # Research Radar Issue 1 Draft
 
 Working title: **The Research Radar House Style**

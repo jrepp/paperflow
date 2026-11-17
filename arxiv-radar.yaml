@@ -4,6 +4,72 @@ lookback_days: 7
 recent_limit: 8
 cited_limit: 8
 citation_candidate_limit: 24
+# Local FastAPI service and integration monitor: paperflow serve
+research:
+  topics:
+    enabled: true
+    auto_publish: true
+    interval_seconds: 900
+    window_hours: 24
+    min_items: 2
+    max_topics: 12
+    max_candidates: 2000
+  storage:
+    adapter: sqlite
+    path: artifacts/radar.db
+    busy_timeout_seconds: 5
+  service:
+    host: 127.0.0.1
+    port: 8000
+  monitor:
+    enabled: true
+    schedule_enabled: true
+    workers: 2
+    poll_seconds: 1
+    run_timeout_seconds: 600
+    retry_seconds: 60
+    max_retry_seconds: 3600
+    jitter_fraction: 0.1
+    jitter_max_seconds: 60
+  telemetry:
+    service_name: paperflow
+    # Override with PAPERFLOW_TELEMETRY__OTLP_ENDPOINT if the Collector is elsewhere.
+    otlp_endpoint: http://127.0.0.1:4318
+  ingestion:
+    channels:
+      hackernews:
+        url: https://news.ycombinator.com/rss
+        discovery: feed
+        enrichers: [hackernews]
+        kind: discussion
+        interval_seconds: 900
+        limit: 200
+        comment_limit: 3
+      lemmy-technology:
+        url: https://lemmy.world/feeds/c/technology.xml
+        discovery: feed
+        kind: discussion
+        interval_seconds: 1800
+        limit: 200
+      mbin:
+        url: https://fedia.io/feed?content=threads
+        discovery: feed
+        kind: discussion
+        interval_seconds: 1800
+        limit: 200
+      tildes-computing:
+        url: https://tildes.net/~comp/topics.atom
+        discovery: feed
+        kind: discussion
+        interval_seconds: 1800
+        limit: 200
+      huggingface-papers:
+        url: https://huggingface.co/api/daily_papers
+        discovery: huggingface-papers
+        kind: paper
+        interval_seconds: 1800
+        limit: 10
+        comment_limit: 0
 sources:
   arxiv:
     enabled: true

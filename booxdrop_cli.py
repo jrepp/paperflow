@@ -1879,7 +1879,6 @@ async def run_opencode_json(
 
     process = await asyncio.create_subprocess_exec(
         *args,
-        cwd="/path/to/paperflow",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -1917,7 +1916,6 @@ async def run_opencode_json(
         retry_args.extend(["--", retry_prompt])
         retry_process = await asyncio.create_subprocess_exec(
             *retry_args,
-            cwd="/path/to/paperflow",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -2420,7 +2418,6 @@ async def build_tex_pdf(tex_path: str, pdf_path: str, build_dir: str) -> None:
             f"-output-directory={build_path}",
             str(tex_file),
         ],
-        cwd="/path/to/paperflow",
         capture_output=True,
         text=True,
     )
@@ -3861,8 +3858,8 @@ def print_plan(plan: SessionPlan) -> None:
         typer.echo("  shelf moves: none")
     if plan.warnings:
         warning("  warnings:")
-        for warning in plan.warnings:
-            typer.echo(f"    {warning}")
+        for message in plan.warnings:
+            typer.echo(f"    {message}")
     else:
         typer.echo("  warnings: none")
 

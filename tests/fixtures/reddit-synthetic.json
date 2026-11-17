@@ -1,0 +1,61 @@
+{
+  "description": "Synthetic validation data. No actual Reddit users, posts, or findings. Paper URLs are illustrative, not verified evidence.",
+  "listing": {
+    "kind": "Listing",
+    "data": {
+      "after": "t3_example",
+      "children": [
+        {
+          "kind": "t3",
+          "data": {
+            "name": "t3_example",
+            "subreddit": "LocalLLaMA",
+            "title": "[Synthetic example] Do small models generalize?",
+            "selftext": "A discussion of evaluation conditions. Illustrative paper link: https://arxiv.org/abs/2401.00001",
+            "is_self": true,
+            "permalink": "/r/LocalLLaMA/comments/example/synthetic/",
+            "created_utc": 1735689600,
+            "score": 120,
+            "upvote_ratio": 0.92,
+            "num_comments": 35
+          }
+        }
+      ]
+    }
+  },
+  "comments": {
+    "example": [
+      {"kind": "Listing", "data": {"children": []}},
+      {
+        "kind": "Listing",
+        "data": {
+          "children": [
+            {
+              "kind": "t1",
+              "data": {
+                "name": "t1_evidence",
+                "parent_id": "t3_example",
+                "body": "Synthetic comment: compare evaluation conditions before generalizing. Illustrative reference: https://doi.org/10.1234/example",
+                "score": 42,
+                "score_hidden": false,
+                "permalink": "/r/LocalLLaMA/comments/example/synthetic/evidence/"
+              }
+            },
+            {
+              "kind": "t1",
+              "data": {
+                "name": "t1_hidden",
+                "parent_id": "t3_example",
+                "body": "Synthetic comment: an unresolved question about the baseline.",
+                "score": 1,
+                "score_hidden": true,
+                "permalink": "/r/LocalLLaMA/comments/example/synthetic/hidden/"
+              }
+            },
+            {"kind": "more", "data": {"count": 33, "children": ["not-fetched"]}}
+          ]
+        }
+      }
+    ]
+  }
+}

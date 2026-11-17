@@ -1,0 +1,39 @@
+# Copy selected channel definitions under research.ingestion in arxiv-radar.yaml.
+# Small limits keep source validation bounded. These are examples, not subscriptions.
+research:
+  topics:
+    enabled: true
+    auto_publish: true
+    interval_seconds: 900
+    window_hours: 24
+    min_items: 2
+    max_topics: 12
+    max_candidates: 2000
+  storage:
+    path: artifacts/source-validation.db
+  ingestion:
+    channels:
+      hackernews:
+        url: https://news.ycombinator.com/rss
+        discovery: feed
+        enrichers: [hackernews]
+        limit: 2
+        comment_limit: 1
+      lemmy-technology:
+        url: https://lemmy.world/feeds/c/technology.xml
+        discovery: feed
+        limit: 2
+      mbin:
+        url: https://fedia.io/feed?content=threads
+        discovery: feed
+        limit: 2
+      tildes-computing:
+        url: https://tildes.net/~comp/topics.atom
+        discovery: feed
+        limit: 2
+      huggingface-papers:
+        url: https://huggingface.co/api/daily_papers
+        discovery: huggingface-papers
+        kind: paper
+        limit: 2
+        comment_limit: 0

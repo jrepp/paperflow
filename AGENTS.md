@@ -1,3 +1,10 @@
+---
+title: Paperflow agent instructions
+project_id: paperflow
+doc_uuid: 095a5f5f-e9b5-4554-9d44-021d932bcfc6
+tags: [agents, development]
+---
+
 # CLI Guide
 
 The preferred project-centric CLI is `paperflow`.
@@ -204,3 +211,35 @@ arxiv-radar deliver --host http://DEVICE_HOST:PORT --apply
 - `paperflow` should prefer stable local config defaults unless a CLI override is explicitly provided.
 - Hugging Face daily papers reports should be explicit source artifacts that can flow through the same TUI, export, prepare, report, and sync stages.
 - For paper analysis, prefer extracted Markdown over raw PDF attachment behavior.
+
+
+## Documentation and validation
+
+- Start at [docs/README.md](docs/README.md). Use `docs/plans`, `docs/designs`,
+  `docs/guides`, `docs/reference`, `docs/validation`, or `docs/periodicals`.
+- Governed Markdown uses kebab-case names and Docuchango generic frontmatter.
+  Preserve document UUIDs and decision status; add every document to the index.
+- `.toolchain.env` owns uv/Python pins. Use direnv and `scripts/bootstrap` to
+  install locked dependencies and the pre-commit hooks.
+- Run `scripts/check` before handoff. Hooks and GitHub Actions call the same
+  checks. `scripts/check integration` additionally requires Docker.
+- Use Conventional Commit titles. Release Please manages VERSION, Python package
+  version, lockfile and changelog. See [development guide](docs/guides/development.md).
+
+- All repository-owned Markdown must be scanned by the Docuchango project or
+  registered as an index. `scripts/check docs` also checks coverage against Git's
+  tracked and non-ignored untracked files, so new folders cannot escape validation.
+- README landing pages and the Release Please changelog retain plain Markdown;
+  the documentation wrapper validates their bodies through Docuchango. Keep
+  frontmatter on AGENTS.md and governed documentation; never regenerate UUIDs.
+
+## Acceptance references
+
+Keep stable requirement and criterion IDs in the
+[acceptance baseline](docs/plans/reader-acceptance.md). Link implementation coverage
+with qualified references and `implements` frontmatter using Docuchango traceability.
+Update the [coverage document](docs/validation/reader-acceptance.md) and its JSON
+manifest together. Claim covered only with a runnable test; keep unimplemented
+journeys unresolved. Run `scripts/check acceptance` for focused feedback and
+`scripts/check` before handoff. Backend acceptance does not establish browser or
+accessibility readiness.

@@ -18,3 +18,41 @@ tex/research-radar/chapters/
 tex/research-radar/research-radar.tex
 tex/research-radar/build-metadata.json
 artifacts/publishing-corpus.json
+.venv/
+.direnv/
+.pytest_cache/
+
+# Reader tooling and browser reports
+node_modules/
+playwright-report/
+test-results/
+
+# Credentials, local overrides, and private key material
+.env.*
+!.env.example
+!.env.*.example
+*.local.yaml
+*.local.yml
+*.local.toml
+*.local.container
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.yaml
+secrets.yml
+
+# Local databases, logs, editor state, and scan receipts
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.log
+.coverage*
+htmlcov/
+.mypy_cache/
+.idea/
+.vscode/
+.codex/

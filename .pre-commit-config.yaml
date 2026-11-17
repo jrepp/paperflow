@@ -1,0 +1,40 @@
+# Each hook calls the same repository entrypoint used by GitHub Actions.
+repos:
+  - repo: local
+    hooks:
+      - id: paperflow-security
+        name: Credentials and private environment details
+        entry: scripts/check security
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: paperflow-code
+        name: Python lint, lockfile, and unit tests
+        entry: scripts/check code
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: paperflow-docs
+        name: Docuchango documentation validation
+        entry: scripts/check docs
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: paperflow-workflows
+        name: GitHub Actions syntax and expressions
+        entry: scripts/check workflows
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: paperflow-release
+        name: Release versions and package contract
+        entry: scripts/check release
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: paperflow-reader
+        name: Reader syntax and generated Tailwind CSS
+        entry: scripts/check reader
+        language: system
+        pass_filenames: false
+        always_run: true

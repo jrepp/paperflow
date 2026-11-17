@@ -1,0 +1,70 @@
+name: Validate
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  checks:
+    name: Local checks and package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Read shared toolchain
+        id: tools
+        run: |
+          sed '/^#/d; /^$/d' .toolchain.env >> "$GITHUB_OUTPUT"
+          sed '/^#/d; /^$/d' .toolchain.env >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          version: ${{ steps.tools.outputs.UV_VERSION }}
+          python-version: ${{ steps.tools.outputs.UV_PYTHON }}
+          enable-cache: true
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ steps.tools.outputs.NODE_VERSION }}
+          cache: npm
+      - name: Install pinned secret scanner
+        run: |
+          go install "github.com/gitleaks/gitleaks/v8@v$GITLEAKS_VERSION"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Install locked dependencies
+        run: ./scripts/bootstrap
+      - name: Run the local pre-commit contract
+        run: uv run --locked pre-commit run --all-files --show-diff-on-failure
+      - name: Scan reachable commit history
+        run: gitleaks git --redact --no-banner --log-opts=--all
+      - name: Install browser for reader acceptance
+        run: npx playwright install --with-deps chromium webkit
+      - name: Reader browser journeys and accessibility checks
+        run: ./scripts/check acceptance
+      - name: Build and smoke-test distributions
+        run: ./scripts/package
+  integration:
+    name: Docker integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: tools
+        run: |
+          sed '/^#/d; /^$/d' .toolchain.env >> "$GITHUB_OUTPUT"
+          sed '/^#/d; /^$/d' .toolchain.env >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          version: ${{ steps.tools.outputs.UV_VERSION }}
+          python-version: ${{ steps.tools.outputs.UV_PYTHON }}
+          enable-cache: true
+      - run: ./scripts/check integration

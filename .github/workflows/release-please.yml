@@ -1,0 +1,31 @@
+name: Release Please
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+jobs:
+  release-please:
+    if: vars.RELEASE_AUTOMATION_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      # A repository-scoped bot token permits release PR checks and tag workflows
+      # to trigger. The default GITHUB_TOKEN suppresses those follow-on events.
+      - name: Check release bot token
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo 'Configure RELEASE_PLEASE_TOKEN as documented in docs/guides/development.md.' >&2
+            exit 1
+          fi
+      - uses: googleapis/release-please-action@0dfd8538845b8e92600d271a895a5372865d4062 # v5
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

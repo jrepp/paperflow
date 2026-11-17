@@ -1,0 +1,30 @@
+title = "Paperflow credentials and private environment details"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "personal-home-path"
+description = "Personal home directories must not be published"
+regex = '''/(?:Users|home)/[A-Za-z0-9_.-]+/'''
+
+[[rules]]
+id = "private-network-address"
+description = "Use loopback or documentation addresses in examples"
+regex = '''\b(?:10\.(?:[0-9]{1,3}\.){2}[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}|172\.(?:1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3}|100\.(?:6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3})\b'''
+
+[[rules]]
+id = "personal-email"
+description = "Personal email addresses require removal before publication"
+regex = '''(?i)[a-z0-9._%+-]+@(?:gmail|hotmail|outlook|yahoo|icloud|protonmail)\.com'''
+
+# Cytoscape's bundled atlas-count assignment is code, not a credential.
+# Scope the exception to this exact expression and generated file only.
+[[rules]]
+id = "generic-api-key"
+[[rules.allowlists]]
+description = "Cytoscape atlas count expression"
+condition = "AND"
+paths = ['''(?:^|/)paperflow_reader/static/viewers\.js$''']
+regexTarget = "secret"
+regexes = ['''^b=p\.atlasCount$''']

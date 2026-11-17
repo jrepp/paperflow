@@ -1,0 +1,20 @@
+{
+  "name": "paperflow-reader",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tailwindcss -i frontend/reader.css -o paperflow_reader/static/reader.css --minify && node scripts/build-reader.mjs",
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.65.1",
+    "@tailwindcss/cli": "4.3.5",
+    "dompurify": "3.4.18",
+    "esbuild": "0.28.2",
+    "markdown-it": "15.0.3",
+    "mermaid": "12.3.0",
+    "pdfjs-dist": "6.5.438",
+    "tailwindcss": "4.3.5"
+  }
+}

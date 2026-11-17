@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd /path/to/paperflow
-export PATH="/path/to/paperflow/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+export PATH="$root/.venv/bin:$PATH"
 
 ./arxiv-radar refresh --update-only --config arxiv-radar.yaml

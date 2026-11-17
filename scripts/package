@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+./scripts/check release
+set -a
+source .toolchain.env
+set +a
+output="artifacts/release/$(cat VERSION)"
+mkdir -p "$output"
+uv build --out-dir "$output"
+uv run --locked twine check --strict "$output"/*.whl "$output"/*.tar.gz
+smoke="$(mktemp -d)"
+trap 'rm -rf "$smoke"' EXIT
+uv venv --python "$UV_PYTHON" "$smoke/venv"
+uv export --locked --no-dev --no-emit-project --no-hashes --format requirements-txt --output-file "$output/requirements.txt" >/dev/null
+uv pip install --python "$smoke/venv/bin/python" --constraint "$output/requirements.txt" "$output"/*.whl
+# Import and exercise the installed wheel outside the repository.
+(cd "$smoke" && "$smoke/venv/bin/python" -c 'import paperflow_api, paperflow_curation; from importlib.metadata import version; from importlib.resources import files; assert (files("paperflow_reader") / "static/index.html").is_file(); assert (files("paperflow_reader") / "static/reader.css").is_file(); print("Installed paperflow", version("paperflow"))')
+(cd "$smoke" && "$smoke/venv/bin/paperflow" --help >/dev/null)
+uv run --locked python - "$output" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+output = Path(sys.argv[1])
+files = sorted([*output.glob('*.whl'), *output.glob('*.tar.gz'), output/'requirements.txt'])
+(output/'SHA256SUMS').write_text(''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in files))
+PY

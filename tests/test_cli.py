@@ -158,3 +158,21 @@ def test_manual_library_merges_into_manifest(tmp_path):
     assert merged["sync_contract"]["categories"]["AI"]["physical_targets"] == [
         "/storage/emulated/0/Books/AI/Research radar/grep.pdf"
     ]
+
+
+def test_empty_export_warning_includes_filter_context(monkeypatch, capsys):
+    import arxiv_radar_cli
+    monkeypatch.setattr(arxiv_radar_cli, 'radar_export_summary', lambda *a, **kw: {'selected_count': 0})
+    arxiv_radar_cli._warn_if_export_empty(report_path='unused.json', section='recent', categories=['AI'],
+        exclude_categories=[], top=3, min_citations=10, max_citations=None, since=None, lookback_days=7)
+    stderr = capsys.readouterr().err
+    assert 'zero papers' in stderr
+    assert 'section=recent' in stderr
+    assert 'lookback_days=7' in stderr
+
+
+def test_session_plan_can_print_warnings(capsys):
+    from booxdrop_cli import SessionPlan, print_plan
+    print_plan(SessionPlan(warnings=['Missing source']))
+    output = capsys.readouterr()
+    assert 'Missing source' in output.out + output.err

@@ -4,6 +4,8 @@ import typer
 
 import arxiv_radar_cli as radar_cli
 import boox_sync_cli
+from paperflow_curate_cli import app as curate_app, api_app
+from paperflow_topic_cli import app as topic_app
 from paperflow_periodical import (
     DEFAULT_PERIODICAL_QUEUE_PATH,
     add_editorial_periodical_queue_item,
@@ -31,6 +33,8 @@ app = typer.Typer(
     no_args_is_help=True,
     help="Project-centric research paper discovery, publishing, and delivery workflow",
 )
+
+app.add_typer(topic_app, name='topics')
 
 radar_app = typer.Typer(
     add_completion=False,
@@ -76,6 +80,24 @@ def status_command(
     radar_cli.db_status_command(db=db)
 
 
+@app.command("serve")
+def serve_command(
+    config: str = typer.Option("arxiv-radar.yaml", help="Settings file for the local service"),
+    host: str | None = typer.Option(None, help="Override the configured bind address"),
+    port: int | None = typer.Option(None, min=1, max=65535, help="Override the configured port"),
+) -> None:
+    """Run the local FastAPI service and integration monitor (one worker)."""
+    import logging
+    import uvicorn
+    from paperflow_api import create_app
+    from paperflow_settings import load_research_settings
+
+    overrides = {key: value for key, value in {"host": host, "port": port}.items() if value is not None}
+    settings = load_research_settings(config, **({"service": overrides} if overrides else {}))
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    uvicorn.run(create_app(settings), host=settings.service.host, port=settings.service.port, workers=1)
+
+
 @app.command("init")
 def init_command(
     db: str = typer.Option(radar_cli.DEFAULT_DB_PATH, help="SQLite database path"),
@@ -95,12 +117,93 @@ radar_app.command("export")(radar_cli.export_command)
 sources_app.command("arxiv-ingest")(radar_cli.arxiv_ingest_command)
 sources_app.command("hf-papers")(radar_cli.huggingface_papers_command)
 
+
+@sources_app.command("reddit-probe")
+def reddit_probe_command(
+    subreddit: str = typer.Option("LocalLLaMA", help="Subreddit name without r/"),
+    config: str = typer.Option("arxiv-radar.yaml", help="Stable local config"),
+    fixture: str | None = typer.Option(None, help="Offline synthetic response bundle; no network access"),
+    sort: str = typer.Option("top", help="top, new, or hot"),
+    window: str = typer.Option("week", help="Time window for top posts"),
+    limit: int = typer.Option(5, min=1, max=10),
+    comments: int = typer.Option(5, min=0, max=20, help="Top-level comment sample per post"),
+) -> None:
+    """Validate Reddit discovery and signals; print JSON without writing the library."""
+    import json
+    from pathlib import Path
+    from paperflow_settings import load_research_settings
+    from paperflow_sources_reddit import (
+        RedditAccessError, RedditProbeRequest, RedditTransport, fixture_transport, probe_reddit,
+    )
+
+    try:
+        request = RedditProbeRequest(subreddit=subreddit, sort=sort, window=window,
+                                     limit=limit, comments_per_post=comments)
+        if fixture:
+            transport = fixture_transport(json.loads(Path(fixture).read_text(encoding="utf-8")))
+        else:
+            transport = RedditTransport(load_research_settings(config).reddit)
+        result = probe_reddit(request, transport, mode="fixture" if fixture else "live")
+    except (RedditAccessError, OSError, ValueError, KeyError, TypeError) as exc:
+        # Do not print validation payloads: configuration can contain credentials.
+        message = str(exc) if isinstance(exc, RedditAccessError) else "Invalid probe configuration or response; check inputs and fixture shape."
+        typer.echo(message, err=True)
+        raise typer.Exit(1)
+    typer.echo(result.model_dump_json(indent=2))
+
+
+@sources_app.command("collect")
+def collect_channel_command(
+    channel: str = typer.Argument(..., help="Channel key under research.ingestion.channels"),
+    config: str = typer.Option("arxiv-radar.yaml", help="YAML settings file"),
+    persist: bool = typer.Option(False, help="Store observations and excerpts in the research database"),
+) -> None:
+    """Discover a configured feed, apply optional enrichers, and emit a typed batch."""
+    from paperflow_ingestion import default_registry, persist_batch
+    from paperflow_settings import load_research_settings
+    from paperflow_storage import StorageError
+    from paperflow_storage_sqlite import SQLiteResearchStorage
+
+    try:
+        settings = load_research_settings(config)
+        if channel not in settings.ingestion.channels:
+            raise ValueError(f"unknown channel: {channel}")
+        batch = default_registry().collect(channel, settings.ingestion.channels[channel])
+        if persist:
+            storage = SQLiteResearchStorage(settings.storage)
+            storage.initialize()
+            persist_batch(storage, batch)
+    except (OSError, ValueError, StorageError) as exc:
+        typer.echo(f"Channel collection failed ({type(exc).__name__}); check configuration, endpoint, and storage.", err=True)
+        raise typer.Exit(1)
+    typer.echo(batch.model_dump_json(indent=2))
+
 library_app.command("prepare")(radar_cli.prepare_command)
 library_app.command("report")(radar_cli.report_command)
 library_app.command("manifest-summary")(radar_cli.manifest_summary_command)
 library_app.command("cache-summary")(radar_cli.cache_summary_command)
 library_app.command("cache-prime")(radar_cli.cache_prime_command)
 library_app.command("stage")(radar_cli.stage_command)
+
+
+@publish_app.command("site")
+def publish_site_command(
+    config: str = typer.Option("arxiv-radar.yaml", help="Settings file selecting the research storage"),
+    out: str = typer.Option("artifacts/site", help="Output directory for the static bundle"),
+    window_hours: int = typer.Option(
+        168, min=1, max=720, help="Decay window: items older than this leave the channels"
+    ),
+    per_channel_limit: int = typer.Option(
+        20, min=1, max=200, help="Balanced cap on items per channel"
+    ),
+) -> None:
+    """Render the static published site (channels with balanced decay)."""
+    import json
+
+    from paperflow_publish_site import build_site
+
+    manifest = build_site(config, out, window_hours=window_hours, per_channel_limit=per_channel_limit)
+    typer.echo(json.dumps(manifest, indent=2, sort_keys=True))
 
 
 @publish_app.command("corpus")
@@ -288,6 +391,8 @@ project_app.command("reconcile")(radar_cli.reconcile_command)
 project_app.command("extraction-status")(radar_cli.extraction_status_command)
 
 app.add_typer(radar_app, name="radar")
+app.add_typer(curate_app, name="curate")
+app.add_typer(api_app, name="api")
 app.add_typer(sources_app, name="sources")
 app.add_typer(library_app, name="library")
 app.add_typer(publish_app, name="publish")

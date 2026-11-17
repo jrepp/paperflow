@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Today · Paperflow</title>
+<link rel="stylesheet" href="/reader-assets/reader.css">
+<script type="module" src="/reader-assets/reader.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="masthead">
+  <div class="shell topbar">
+    <a href="/" class="brand" aria-label="Paperflow home">Paperflow <span aria-hidden="true">/</span></a>
+    <nav aria-label="Main" class="primary-nav">
+      <a href="/" data-nav="today">Today</a><a href="/saved" data-nav="saved">Saved</a><a href="/research" data-nav="research">Research</a>
+    </nav>
+    <form id="global-search" role="search"><input type="search" name="query" aria-label="Search titles" placeholder="Search" maxlength="200"></form>
+    <a href="/sources" class="header-link">Sources</a>
+    <button id="settings-open" type="button" aria-label="Reading settings">Settings</button>
+  </div>
+</header>
+<div id="notice" class="shell" role="status" aria-live="polite"></div>
+<main id="main" class="shell py-8" tabindex="-1" aria-busy="true"><h1>Opening your reading space…</h1></main>
+<footer class="shell py-8 muted">Stored in this local workspace. <a href="/about">About Paperflow</a></footer>
+<dialog id="settings" aria-labelledby="settings-title">
+<form id="preferences-form">
+  <div class="flex flex-wrap items-center justify-between gap-3"><h2 id="settings-title">Make room to read</h2><button type="button" id="settings-close">Close</button></div>
+  <p class="muted">Reading settings apply across this local workspace.</p>
+  <label>Text size<select name="font_size"><option value="18">18 px</option><option value="20">20 px</option><option value="22">22 px</option><option value="24">24 px</option><option value="28">28 px</option></select></label>
+  <label>Line spacing<select name="line_height"><option value="1.5">Comfortable · 1.5</option><option value="1.75">Open · 1.75</option><option value="2">Spacious · 2</option></select></label>
+  <label>Reading width<select name="measure"><option value="55">Narrow · 55 characters</option><option value="65">Balanced · 65 characters</option><option value="75">Wide · 75 characters</option></select></label>
+  <label>Typeface<select name="font"><option value="serif">Serif</option><option value="sans">Sans serif</option></select></label>
+  <label>Theme<select name="theme"><option value="paper">Warm paper</option><option value="night">Night</option><option value="contrast">High contrast</option></select></label>
+  <p id="settings-error" role="alert"></p><button type="submit" class="primary">Save reading settings</button>
+</form>
+</dialog>
+<noscript><p class="shell">This reader needs JavaScript for navigation and saving. The local API remains available at <a href="/docs">API documentation</a>.</p></noscript>
+</body>
+</html>

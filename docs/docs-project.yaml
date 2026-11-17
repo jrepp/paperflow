@@ -1,0 +1,58 @@
+# yaml-language-server: $schema=./docs-project.schema.json
+version: "1"
+docuchango_version: "1.20.0"
+project:
+  id: paperflow
+  name: Paperflow
+  description: Reading, research curation, ingestion, and local publishing
+structure:
+  scan_subfolders: true
+  doc_types:
+    documentation:
+      schema: generic
+      folders: [plans, designs, guides, reference, validation, periodicals]
+      naming_standard: kebab-case
+      require_frontmatter: true
+      check_traceability: true
+indexes:
+  - name: Repository overview
+    path: ../README.md
+    targets: [README.md, ../AGENTS.md, ../CHANGELOG.md]
+    require_all_targets: true
+    require_entries: true
+    allow_extra_links: true
+  - name: Agent instructions
+    path: ../AGENTS.md
+    targets: []
+    require_all_targets: false
+    require_entries: false
+    allow_extra_links: true
+  - name: Release changelog
+    path: ../CHANGELOG.md
+    targets: []
+    require_all_targets: false
+    require_entries: false
+    allow_extra_links: true
+  - name: Deployment guide
+    path: ../deploy/README.md
+    targets: []
+    require_all_targets: false
+    require_entries: false
+    allow_extra_links: true
+  - name: Documentation index
+    path: README.md
+    targets:
+      - plans/**/*.md
+      - designs/**/*.md
+      - guides/**/*.md
+      - reference/**/*.md
+      - validation/**/*.md
+      - periodicals/**/*.md
+    require_all_targets: true
+    require_entries: true
+    allow_extra_links: true
+
+# Index files outside docs/ stay within this repository. The coverage checker
+# enforces that boundary and validates their bodies with Docuchango as well.
+security:
+  allow_external_paths: true

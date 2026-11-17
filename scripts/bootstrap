@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+set -a
+source .toolchain.env
+set +a
+if [[ "$(uv --version | awk '{print $2}')" != "$UV_VERSION" ]]; then
+  echo "Install uv $UV_VERSION before bootstrapping Paperflow." >&2
+  exit 1
+fi
+uv sync --locked --group dev --extra test --extra telemetry
+if [[ "$(node --version)" != "v$NODE_VERSION" ]]; then
+  echo "Install Node $NODE_VERSION for reader development." >&2
+  exit 1
+fi
+npm ci
+default_hooks="$(git rev-parse --path-format=absolute --git-common-dir)/hooks"
+configured_hooks="$(git config --get core.hooksPath || true)"
+if [[ -n "$configured_hooks" && "$configured_hooks" != /dev/null && "$configured_hooks" != "$default_hooks" ]]; then
+  echo "Existing custom hooks directory: $configured_hooks. Integrate it before installing Paperflow hooks." >&2
+  exit 1
+fi
+# Only the installer sees an empty setting; retain any user's global policy.
+GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0= \
+  uv run --locked pre-commit install --install-hooks
+git config --local core.hooksPath "$default_hooks"

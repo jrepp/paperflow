@@ -1,0 +1,45 @@
+[
+  {
+    "criterion": "AC-1",
+    "requirement": "FR-1",
+    "disposition": "covered",
+    "test": "tests/acceptance/test_journeys.py::test_browse_channels",
+    "reason": "FastAPI and on-disk SQLite journey."
+  },
+  {
+    "criterion": "AC-2",
+    "requirement": "FR-2",
+    "disposition": "covered",
+    "test": "tests/acceptance/test_journeys.py::test_read_source_context",
+    "reason": "FastAPI and on-disk SQLite journey."
+  },
+  {
+    "criterion": "AC-3",
+    "requirement": "FR-3",
+    "disposition": "covered",
+    "test": "tests/acceptance/test_journeys.py::test_collect_and_restart",
+    "reason": "FastAPI and on-disk SQLite journey."
+  },
+  {
+    "criterion": "AC-4",
+    "requirement": "FR-4",
+    "disposition": "covered",
+    "test": "tests/acceptance/test_journeys.py::test_review_evidence",
+    "reason": "FastAPI and on-disk SQLite journey."
+  },
+  {
+    "criterion": "AC-5",
+    "requirement": "FR-5",
+    "disposition": "covered",
+    "test": "tests/acceptance/test_reader_state.py::test_saved_position_preferences_and_old_revision_survive_restart",
+    "reason": "SQLite restart and backup tests plus the real browser save and resume journey.",
+    "browser_test": "reader.spec.js::browse, save, read, return, and resume in a new browser context"
+  },
+  {
+    "criterion": "AC-6",
+    "requirement": "FR-6",
+    "disposition": "unresolved",
+    "test": "",
+    "reason": "Browser surface and automated accessibility checks exist; manual screen-reader and native zoom verification remain open."
+  }
+]

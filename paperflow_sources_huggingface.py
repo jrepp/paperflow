@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import json
+import re
 import urllib.parse
+from datetime import datetime
+from typing import Callable
 from dataclasses import dataclass
 
 from paperflow_http import get_json
+from paperflow_ingest_models import ChannelConfig, Signals, SourceEntry
+from paperflow_sources_feed import plain_text
 from paperflow_radar import (
     normalize_arxiv_id,
     sanitize_filename,
@@ -206,3 +212,69 @@ def build_report(
         highly_cited=[],
         lookback_days=1,
     )
+
+
+class HuggingFacePapersDiscovery:
+    """Public daily papers API adapted to the source-neutral ingestion contract.
+
+    This intentionally does not use the legacy radar conversion: missing vote
+    counts remain unknown and the source abstract remains excerpt evidence.
+    """
+
+    def fetch(self, channel: ChannelConfig, get: Callable[[str], bytes]) -> tuple[list[SourceEntry], list[str]]:
+        endpoint = urllib.parse.urlsplit(str(channel.url))
+        if (endpoint.scheme != "https" or endpoint.netloc != "huggingface.co"
+                or endpoint.path != "/api/daily_papers" or endpoint.fragment):
+            raise ValueError("huggingface-papers requires https://huggingface.co/api/daily_papers")
+        if channel.kind != "paper":
+            raise ValueError("huggingface-papers requires kind: paper")
+        query = [(key, value) for key, value in urllib.parse.parse_qsl(endpoint.query)
+                 if key != "limit"]
+        query.append(("limit", str(channel.limit)))
+        url = urllib.parse.urlunsplit(endpoint._replace(query=urllib.parse.urlencode(query)))
+        payload = json.loads(get(url))
+        if not isinstance(payload, list):
+            raise ValueError("Hugging Face daily papers response must be a list")
+        entries: list[SourceEntry] = []
+        warnings: list[str] = []
+        seen: set[str] = set()
+        for index, row in enumerate(payload[:channel.limit]):
+            paper = row.get("paper") if isinstance(row, dict) else None
+            if not isinstance(paper, dict):
+                warnings.append(f"huggingface-papers: invalid paper at position {index}")
+                continue
+            paper_id = paper.get("id")
+            title = paper.get("title")
+            if (not isinstance(paper_id, str)
+                    or not re.fullmatch(r"(?:[0-9]{4}\.[0-9]{4,5}|[a-z-]+(?:\.[A-Z]{2})?/[0-9]{7})(?:v[0-9]+)?", paper_id)
+                    or not isinstance(title, str) or not plain_text(title).strip()):
+                warnings.append(f"huggingface-papers: invalid identity or title at position {index}")
+                continue
+            if paper_id in seen:
+                continue
+            published = None
+            if paper.get("publishedAt") is not None:
+                try:
+                    published = datetime.fromisoformat(paper["publishedAt"].replace("Z", "+00:00"))
+                    if published.utcoffset() is None:
+                        raise ValueError("missing timezone")
+                except (ValueError, TypeError, AttributeError):
+                    published = None
+                    warnings.append(f"huggingface-papers: invalid publication date for {paper_id}")
+            counts = []
+            for label, value in (("upvotes", paper.get("upvotes")), ("numComments", row.get("numComments"))):
+                if value is not None and (type(value) is not int or value < 0):
+                    warnings.append(f"huggingface-papers: invalid {label} for {paper_id}")
+                    value = None
+                counts.append(value)
+            summary = paper.get("summary")
+            entries.append(SourceEntry(
+                source_id=paper_id, title=plain_text(title).strip(),
+                url=f"https://arxiv.org/abs/{paper_id}",
+                discussion_url=f"{HF_PAPERS_URL}/{paper_id}",
+                published_at=published,
+                excerpt=plain_text(summary) if isinstance(summary, str) else "",
+                signals=Signals(score=counts[0], comment_count=counts[1]),
+            ))
+            seen.add(paper_id)
+        return entries, warnings

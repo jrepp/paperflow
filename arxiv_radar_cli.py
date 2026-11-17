@@ -157,15 +157,6 @@ def _warn_if_export_empty(
         err=True,
     )
 
-
-def _boox_sync_executable() -> str:
-    found = shutil.which("boox-sync")
-    if found:
-        return found
-    local = Path(__file__).with_name("boox-sync")
-    if local.exists():
-        return str(local)
-    raise RuntimeError("could not locate boox-sync executable")
     typer.secho(
         _format_filter_summary(
             section=section,
@@ -180,6 +171,16 @@ def _boox_sync_executable() -> str:
         fg=typer.colors.YELLOW,
         err=True,
     )
+
+
+def _boox_sync_executable() -> str:
+    found = shutil.which("boox-sync")
+    if found:
+        return found
+    local = Path(__file__).with_name("boox-sync")
+    if local.exists():
+        return str(local)
+    raise RuntimeError("could not locate boox-sync executable")
 
 
 app = typer.Typer(
@@ -938,7 +939,7 @@ def deliver_command(
     ]
     if apply:
         sync_cmd.append("--apply")
-    result = subprocess.run(sync_cmd, cwd="/path/to/paperflow")
+    result = subprocess.run(sync_cmd)
     raise typer.Exit(result.returncode)
 
 

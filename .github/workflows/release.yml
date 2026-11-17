@@ -1,0 +1,94 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vX.Y.Z tag to validate and publish
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: paperflow-release
+  cancel-in-progress: false
+jobs:
+  stage:
+    name: Validate and stage exact tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      tag: ${{ steps.target.outputs.tag }}
+      sha: ${{ steps.target.outputs.sha }}
+    steps:
+      - name: Validate requested tag syntax
+        id: target-name
+        env:
+          TARGET_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          [[ "$TARGET_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: refs/tags/${{ steps.target-name.outputs.tag }}
+      - id: target
+        env:
+          TAG: ${{ steps.target-name.outputs.tag }}
+        run: |
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - id: tools
+        run: |
+          sed '/^#/d; /^$/d' .toolchain.env >> "$GITHUB_OUTPUT"
+          sed '/^#/d; /^$/d' .toolchain.env >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          version: ${{ steps.tools.outputs.UV_VERSION }}
+          python-version: ${{ steps.tools.outputs.UV_PYTHON }}
+          enable-cache: true
+      - name: Install pinned secret scanner
+        run: |
+          go install "github.com/gitleaks/gitleaks/v8@v$GITLEAKS_VERSION"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ steps.tools.outputs.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Stage validated distribution
+        env:
+          TAG: ${{ steps.target.outputs.tag }}
+        run: ./scripts/release-stage "$TAG"
+      - run: ./scripts/check integration
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-distributions
+          path: artifacts/release/
+          if-no-files-found: error
+  publish:
+    name: Publish GitHub release assets
+    needs: stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-distributions
+          path: release-assets
+      - name: Attach validated artifacts to the existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.stage.outputs.tag }}
+          EXPECTED_SHA: ${{ needs.stage.outputs.sha }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" >/dev/null
+          # Compare the tag's commit again before attaching assets.
+          actual=$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)
+          test "$actual" = "$EXPECTED_SHA"
+          gh release upload "$TAG" release-assets/*/*.whl release-assets/*/*.tar.gz release-assets/*/requirements.txt release-assets/*/SHA256SUMS --clobber

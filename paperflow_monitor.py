@@ -1,0 +1,242 @@
+"""Single-owner local scheduler; blocking integration work runs in bounded threads."""
+from __future__ import annotations
+
+import fcntl
+import json
+import math
+import logging
+import threading
+import time
+import urllib.error
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+from concurrent.futures import ThreadPoolExecutor
+
+from opentelemetry.trace import Status, StatusCode
+
+from paperflow_http import get_bytes
+from paperflow_ingestion import default_registry
+from paperflow_monitor_store import MonitorStore
+from paperflow_settings import ResearchSettings
+from paperflow_telemetry import Telemetry
+
+logger = logging.getLogger("paperflow.monitor")
+
+
+def retry_after_seconds(value: str | None) -> float:
+    if not value:
+        return 0
+    try:
+        seconds = float(value)
+        return max(0, seconds) if math.isfinite(seconds) else 0
+    except ValueError:
+        try:
+            return max(0, (parsedate_to_datetime(value) - datetime.now(UTC)).total_seconds())
+        except (ValueError, TypeError, OverflowError):
+            return 0
+
+
+class IntegrationMonitor:
+    def __init__(self, settings: ResearchSettings, *, registry=None, transport=get_bytes, telemetry=None):
+        self.settings = settings
+        self.store = MonitorStore(settings.storage, settings.monitor)
+        self.registry = registry or default_registry()
+        self.transport = transport
+        self.telemetry = telemetry
+        self._owns_telemetry = telemetry is None
+        self._stop = threading.Event()
+        self._thread = None
+        self._lock = None
+        self._pool = None
+        self._futures = {}
+        self._topic_future = None
+        self._next_topic_at = 0
+        self.topic_error = None
+        self.last_topic_run = None
+        self.last_tick = None
+        self.last_error = None
+
+    def start(self):
+        path = self.settings.storage.path.resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = open(str(path) + ".monitor.lock", "a")
+        try:
+            fcntl.flock(self._lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            self._lock.close()
+            self._lock = None
+            raise RuntimeError("Another monitor owns this database; run one FastAPI worker") from None
+        try:
+            self.store.initialize(self.settings.ingestion.channels)
+            self.store.recover()
+            if self.telemetry is None:
+                self.telemetry = Telemetry(self.settings.telemetry)
+            if self.settings.monitor.enabled:
+                self._pool = ThreadPoolExecutor(max_workers=self.settings.monitor.workers, thread_name_prefix="paperflow-ingest")
+                self._thread = threading.Thread(target=self._loop, name="paperflow-monitor", daemon=True)
+                self._thread.start()
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        self._stop.set()
+        if self._thread:
+            self._thread.join()
+        if self._pool:
+            self._pool.shutdown(wait=True)
+        if self._owns_telemetry and self.telemetry:
+            self.telemetry.shutdown()
+        if self._lock:
+            fcntl.flock(self._lock, fcntl.LOCK_UN)
+            self._lock.close()
+            self._lock = None
+
+    @property
+    def accepting(self):
+        return bool(self._thread and self._thread.is_alive() and not self._stop.is_set())
+
+    def health(self):
+        overdue = [str(run.id) for run in self.store.running()
+                   if run.status == "running" and run.started_at and
+                   time.time() - run.started_at.timestamp() > self.settings.monitor.run_timeout_seconds]
+        tick_recent = self.last_tick is not None and time.time() - self.last_tick < max(
+            5, self.settings.monitor.poll_seconds * 3 + self.settings.storage.busy_timeout_seconds)
+        healthy = self.accepting and tick_recent and not self.last_error and not self.topic_error and not overdue
+        return {"healthy": healthy, "enabled": self.settings.monitor.enabled,
+                "scheduler_running": self.accepting, "schedule_enabled": self.settings.monitor.schedule_enabled,
+                "telemetry": {"otlp_configured": bool(self.settings.telemetry.otlp_endpoint)}, "last_tick": self.last_tick,
+                "scheduler_error": self.last_error, "overdue_runs": overdue,
+                "topics": {"enabled": self.settings.topics.enabled, "running": bool(self._topic_future and not self._topic_future.done()),
+                           "last_run_id": self.last_topic_run, "error": self.topic_error}}
+
+    def _loop(self):
+        while not self._stop.is_set():
+            try:
+                if self._topic_future and self._topic_future.done():
+                    try:
+                        self.last_topic_run=str(self._topic_future.result().id)
+                        self.topic_error=None
+                    except Exception as exc:
+                        self.topic_error=type(exc).__name__
+                        self._next_topic_at=time.time()+self.settings.monitor.retry_seconds
+                        logger.error(json.dumps({"event":"topic_curator_error","error_type":self.topic_error}))
+                    self._topic_future=None
+                if (self.settings.monitor.schedule_enabled and self.settings.topics.enabled
+                    and self._topic_future is None and time.time()>=self._next_topic_at
+                    and len(self._futures)<self.settings.monitor.workers):
+                    self._topic_future=self._pool.submit(self._run_topics)
+                    self._next_topic_at=time.time()+self.settings.topics.interval_seconds
+                for future in tuple(self._futures):
+                    if future.done():
+                        try:
+                            future.result()
+                        except Exception as exc:
+                            # A database outage can prevent worker completion.
+                            # Keep the future until its failure can be recorded.
+                            run_id = self._futures[future]
+                            current = self.store.get_run(run_id)
+                            if current and current.status == "running":
+                                self.store.finish(run_id, batch=None, error=type(exc).__name__, duration=0)
+                        del self._futures[future]
+                if self.settings.monitor.schedule_enabled:
+                    self.store.schedule_due()
+                while len(self._futures) + int(self._topic_future is not None) < self.settings.monitor.workers and not self._stop.is_set():
+                    claimed = self.store.claim()
+                    if claimed is None:
+                        break
+                    self._futures[self._pool.submit(self._run, *claimed)] = claimed[0].id
+                self.last_tick = time.time()
+                self.last_error = None
+            except Exception as exc:
+                self.last_error = type(exc).__name__
+                logger.error(json.dumps({"event": "scheduler_error", "error_type": type(exc).__name__}))
+            self._stop.wait(self.settings.monitor.poll_seconds)
+
+    def _run_topics(self):
+        from paperflow_storage_sqlite import SQLiteResearchStorage
+        from paperflow_topics import TopicService
+        from uuid import uuid5, NAMESPACE_URL
+        service=TopicService(SQLiteResearchStorage(self.settings.storage),self.settings.topics)
+        interval=self.settings.topics.interval_seconds
+        slot=int(time.time()//interval)*interval
+        at=datetime.fromtimestamp(slot,UTC)
+        recent=service.runs(1)
+        if recent and recent[0].window_end>=at:
+            return recent[0]
+        run_id=uuid5(NAMESPACE_URL,f'paperflow.topic.scheduled:{slot}:{self.settings.topics.model_dump_json()}:{service.curator.version}')
+        started=time.monotonic();status='failed'
+        with self.telemetry.tracer.start_as_current_span('topics.curate') as span:
+            try:
+                run=service.curate(at=at,run_id=run_id)
+                span.set_attribute('topics.candidates',run.input_count)
+                span.set_attribute('topics.editions',len(run.editions))
+                span.set_attribute('topics.run_id',str(run.id))
+                self.telemetry.topic_candidates.add(run.input_count)
+                status='succeeded'
+                return run
+            finally:
+                self.telemetry.topic_runs.add(1,{'status':status})
+                self.telemetry.topic_duration.record(time.monotonic()-started,{'status':status})
+
+    def _run(self, run, channel):
+        started = time.monotonic()
+        labels = {"channel": run.channel, "discovery": channel.discovery}
+        status = "failed"
+        count = 0
+        retry_after = 0
+        telemetry = self.telemetry
+
+        def check_deadline():
+            if self._stop.is_set():
+                raise InterruptedError("monitor shutdown")
+            if time.monotonic() - started > self.settings.monitor.run_timeout_seconds:
+                raise TimeoutError("run deadline exceeded")
+
+        with telemetry.tracer.start_as_current_span("ingestion.run", attributes=labels) as span:
+            trace_id = format(span.get_span_context().trace_id, "032x")
+            span.set_attribute("run.id", str(run.id))
+            telemetry.active.add(1, labels)
+
+            def progress(stage, completed, total):
+                check_deadline()
+                self.store.progress(run.id, stage, completed, total, trace_id)
+                span.add_event(stage, {"completed": completed, "total": total})
+
+            def fetch(url):
+                nonlocal retry_after
+                check_deadline()
+                if retry_after > 0:
+                    raise OSError("upstream requested a cooldown")
+                with telemetry.tracer.start_as_current_span("ingestion.fetch", record_exception=False, set_status_on_exception=False):
+                    try:
+                        return self.transport(url)
+                    except urllib.error.HTTPError as exc:
+                        retry_after = max(retry_after, retry_after_seconds(exc.headers.get("Retry-After")))
+                        raise
+
+            try:
+                batch = self.registry.collect(run.channel, channel, fetch, progress=progress)
+                check_deadline()
+                progress("persisting", len(batch.entries), len(batch.entries))
+                with telemetry.tracer.start_as_current_span("ingestion.persist", record_exception=False, set_status_on_exception=False):
+                    self.store.finish(run.id, batch=batch, error=None, duration=time.monotonic() - started,
+                                      retry_after_seconds=retry_after)
+                count = len(batch.entries)
+                status = "degraded" if batch.warnings or any(e.comments_status == "unavailable" for e in batch.entries) else "succeeded"
+            except Exception as exc:
+                status = "interrupted" if isinstance(exc, InterruptedError) else "failed"
+                # Persist only an error type; upstream messages may contain private URLs or bodies.
+                error = f"HTTP {exc.code}" if isinstance(exc, urllib.error.HTTPError) else type(exc).__name__
+                self.store.finish(run.id, batch=None, error=error, duration=time.monotonic() - started,
+                                  retry_after_seconds=retry_after)
+                span.set_status(Status(StatusCode.ERROR, type(exc).__name__))
+            finally:
+                elapsed = time.monotonic() - started
+                telemetry.active.add(-1, labels)
+                telemetry.runs.add(1, {**labels, "status": status})
+                telemetry.duration.record(elapsed, {**labels, "status": status})
+                telemetry.items.add(count, labels)
+                logger.info(json.dumps({"event": "ingestion_finished", "run_id": str(run.id),
+                    "channel": run.channel, "status": status, "item_count": count,
+                    "duration_seconds": elapsed, "trace_id": trace_id}))

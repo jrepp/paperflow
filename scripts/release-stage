@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Stage a validated distribution; this does not deploy a hosted service.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+./scripts/release-validate
+if [[ $# -gt 0 ]]; then
+  uv run --locked python scripts/release_contract.py "$1"
+fi
+./scripts/package

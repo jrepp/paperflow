@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+set -a
+source .toolchain.env
+set +a
+actual="$(uv --version | awk '{print $2}')"
+if [[ "$actual" != "$UV_VERSION" ]]; then
+  echo "Expected uv $UV_VERSION; found $actual. See .toolchain.env." >&2
+  exit 1
+fi
+run() { uv run --locked --group dev --extra test --extra telemetry "$@"; }
+case "${1:-all}" in
+  security)
+    [[ "$(gitleaks version)" == "$GITLEAKS_VERSION" ]] || { echo "Expected gitleaks $GITLEAKS_VERSION" >&2; exit 1; }
+    snapshot="$(mktemp -d)"
+    trap 'rm -rf "$snapshot"' EXIT
+    # Scan only publishable files, including new files, without copying local secrets.
+    run python - "$snapshot" <<'PYTHON'
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+snapshot = Path(sys.argv[1])
+paths = subprocess.check_output(["git", "ls-files", "-co", "--exclude-standard", "-z"])
+for name in set(paths.decode().split("\0")):
+    source = Path(name)
+    if name and source.is_file() and not source.is_symlink():
+        target = snapshot / source
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+PYTHON
+    gitleaks dir "$snapshot" --config .gitleaks.toml --redact --no-banner --verbose
+    ;;
+  code)
+    uv lock --check
+    run ruff check .
+    run python scripts/acceptance.py --suite --backend-only
+    ;;
+  acceptance) run python scripts/acceptance.py ;;
+  docs)
+    run docuchango validate --dry-run --skip-build
+    run python scripts/docs_validate.py
+    ;;
+  reader)
+    [[ "$(node --version)" == "v$NODE_VERSION" ]] || { echo "Expected Node $NODE_VERSION" >&2; exit 1; }
+    node --check paperflow_reader/static/reader.js
+    node --check tests/browser/reader.spec.js
+    node --check tests/browser/channel-picker.spec.js
+    baseline="$(mktemp)"
+    trap 'rm -f "$baseline"' EXIT
+    run python scripts/reader_asset_hashes.py > "$baseline"
+    npm run build
+    run python scripts/reader_asset_hashes.py | cmp "$baseline" - || { echo "Reader assets were stale; include the rebuilt files." >&2; exit 1; }
+    ;;
+  browser)
+    "$0" reader
+    npm test
+    ;;
+  workflows) run actionlint -shellcheck= -pyflakes= ;;
+  release) run python scripts/release_contract.py ;;
+  integration)
+    # Optional locally; CI requires Docker so this coverage cannot silently skip.
+    docker info >/dev/null
+    mkdir -p artifacts/checks
+    run pytest tests/integration -q --junitxml=artifacts/checks/integration.xml
+    run python -c 'import xml.etree.ElementTree as E; root=E.parse("artifacts/checks/integration.xml"); skipped=sum(int(s.get("skipped",0)) for s in root.iter("testsuite")); assert skipped == 0, f"Integration suite skipped {skipped} tests"'
+    ;;
+  all)
+    "$0" security
+    "$0" code
+    "$0" docs
+    "$0" reader
+    "$0" workflows
+    "$0" release
+    ;;
+  *) echo "Usage: scripts/check [all|security|code|acceptance|docs|reader|browser|workflows|release|integration]" >&2; exit 2 ;;
+esac
