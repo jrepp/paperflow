@@ -107,7 +107,15 @@ def test_failure_preserves_previous_release_and_hides_exception(tmp_path, monkey
         def fail(*args, **kwargs):
             raise RuntimeError('sensitive failure detail')
         monkeypatch.setattr(module, 'build_site_from_storage', fail)
-        failed = completed(client, headers, client.post('/api/publish/builds', headers=headers).json()['id'])
+        # A completed receipt can become visible just before the worker releases
+        # its lock; the documented 503 response asks clients to retry.
+        for _ in range(200):
+            response = client.post('/api/publish/builds', headers=headers)
+            if response.status_code != 503:
+                break
+            time.sleep(.01)
+        assert response.status_code == 202
+        failed = completed(client, headers, response.json()['id'])
         assert failed['status'] == 'failed'
         assert failed['error'] == 'Static build failed.'
         assert previous.read_bytes() == original

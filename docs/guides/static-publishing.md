@@ -72,3 +72,23 @@ retention and must preserve releases still being transferred or served.
 
 The command `paperflow publish site` remains available for local exports. Avoid
 running a separate scheduled exporter into the service-managed releases tree.
+
+## Expandable curation cards
+
+Published links retain their compact default view. Open **Curation & details**
+with a click or keyboard to inspect source metadata, observed score and comment
+counts, discussion links, and model curation when available. Missing counts remain
+absent; zero counts are displayed. Source excerpts are labeled separately from
+model summaries. Curation of an older source revision is explicitly identified.
+
+When the assistant is enabled and its database exists, both CLI and API builds
+include its latest successful public analysis: summary, findings, uncertainty,
+category, and evidence limits. Internal memory, tool activity, costs, and private
+run diagnostics are excluded. Publishing does not run a model or initialize the
+assistant database.
+
+**Read curation Markdown** opens the full document inside the static page, including
+citations, limitations, bias assessments, research gaps, and downstream hypotheses.
+**Download Markdown** saves the same document as a `.md` file. Documents use stable
+item fragment links and are embedded in `index.html`, preserving the two-file
+release and digest verification contract; no private workspace access is needed.

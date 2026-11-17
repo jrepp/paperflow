@@ -193,3 +193,21 @@ button,.control,nav a,.brand { max-width:100%; overflow-wrap:anywhere; white-spa
 .run-list li>div { display:flex; align-items:center; gap:.75rem; flex-wrap:wrap; font-size:.85rem; }
 .run-list p { color:var(--muted); font-size:.75rem; margin:.25rem 0; }
 @media(max-width:650px) { .source-monitor-grid { grid-template-columns:1fr; } .monitor-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+
+/* Published feed: native disclosures work without a script or workspace. */
+.curation-card { margin-top:.45rem; }
+.curation-card summary { cursor:pointer; color:var(--muted); font-size:.85rem; padding:.6rem 0; min-height:44px; }
+.curation-card[open] summary { color:var(--accent); }
+.curation-body { border:1px solid var(--line); border-radius:.5rem; background:var(--tint); padding:1.25rem; margin:.3rem 0 .5rem; overflow-wrap:anywhere; }
+.curation-body h3 { margin:1rem 0 .5rem; }
+.curation-body h3:first-child { margin-top:0; }
+.curation-body ul { padding-left:1.3rem; list-style:disc; }
+.curation-body li { margin-block:.5rem; }
+.curation-body dl { display:flex; flex-wrap:wrap; gap:.75rem 2rem; margin:1rem 0; }
+.curation-body dt { color:var(--muted); font-size:.8rem; }
+.curation-body dd { margin:0; }
+.curation-links a { display:inline-block; padding-block:.5rem; }
+.curation-document { display:none; margin-block:2rem; padding:1.25rem; border:1px solid var(--line); border-radius:.5rem; }
+.curation-document:target { display:block; }
+.curation-document h2 { margin-top:1rem; }
+.curation-document pre { white-space:pre-wrap; overflow-wrap:anywhere; font: .95rem/1.7 ui-monospace,monospace; margin-top:1rem; }

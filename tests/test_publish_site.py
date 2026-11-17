@@ -161,3 +161,120 @@ def test_publish_cli_uses_external_settings_and_overrides(tmp_path: Path, monkey
     assert "Open workspace" not in publish(["--workspace-url", ""])
     monkeypatch.setenv("PAPERFLOW_PUBLISHING__WORKSPACE_URL", "")
     assert "Open workspace" not in publish()
+
+
+def _curated_site(tmp_path):
+    from paperflow_assistant.store import AssistantStore
+    from paperflow_domain import ContentRevision
+
+    now = datetime.now(timezone.utc)
+    storage = _storage(tmp_path)
+    entry = SourceEntry(source_id='paper', title='A paper <script>bad()</script>',
+                        url='https://example.com/paper', discussion_url='https://example.com/discussion',
+                        signals={'score': 0, 'comment_count': 12}, published_at=now)
+    _seed(storage, [IngestBatch(channel='papers', config=ChannelConfig(url='https://example.com', kind='paper'), entries=(entry,))])
+    with storage.transaction(write=True) as repo:
+        item = repo.items(channel='papers', limit=1)[0]
+        revision = repo.add(ContentRevision.from_markdown(item_id=item.id, markdown='An observed result.'))
+    assistant = AssistantStore(tmp_path / 'curation.db')
+    assistant.initialize()
+    assistant.reconcile(storage, 'test')
+    job = assistant.claim(3)
+    analysis = dict(summary='A model summary <img src=x onerror=bad()>', category='science', evidence_basis='abstract',
+                    findings=[dict(statement='An observed result.', kind='reported_result', uncertainty='Limited evidence.',
+                                   citations=[dict(revision_id=str(revision.id), quote='An observed result.', start=0)])],
+                    limitations=['Only the abstract was available.'], biases=[], effects=[], research_gaps=['Replication needed.'])
+    assistant.finish(job['id'], analysis, {}, {}, {}, 1)
+    # Private records must never leak through the public projection.
+    with assistant.connection(True) as conn:
+        conn.execute("UPDATE assistant_jobs SET error='PRIVATE_RUN_DIAGNOSTIC'")
+    out = tmp_path / 'site'
+    build_site_from_storage(storage, out, now=now, assistant_store=assistant)
+    return out, storage, assistant, item
+
+
+def test_published_curation_includes_stats_and_complete_markdown(tmp_path):
+    from html import unescape
+    import re
+    from urllib.parse import unquote
+
+    out, storage, assistant, item = _curated_site(tmp_path)
+    page = (out / 'index.html').read_text()
+    assert '<details class="curation-card">' in page
+    assert '<details class="curation-card" open' not in page
+    assert '<dt>Score</dt><dd>0</dd>' in page
+    assert '<dt>Comments</dt><dd>12</dd>' in page
+    assert 'href="https://example.com/discussion"' in page
+    assert f'href="#curation-{item.id}"' in page
+    assert 'A model summary &lt;img' in page
+    assert '<script>bad()' not in page
+    assert '<img src=x' not in page
+    assert 'PRIVATE_RUN_DIAGNOSTIC' not in page
+    markdown = unquote(unescape(re.search('href="data:text/markdown;charset=utf-8,([^"]+)"', page)[1]))
+    assert '## Findings' in markdown
+    assert 'Only the abstract was available.' in markdown
+    assert 'Replication needed.' in markdown
+    assert 'Evidence (' in markdown
+    assert {p.name for p in out.iterdir()} == {'index.html', 'build.json'}
+
+    from paperflow_domain import ContentRevision
+    with storage.transaction(write=True) as repo:
+        repo.add(ContentRevision.from_markdown(item_id=item.id, markdown='Updated source.'))
+    build_site_from_storage(storage, out, assistant_store=assistant)
+    assert 'earlier source revision' in (out / 'index.html').read_text()
+
+
+def test_missing_curation_does_not_mislabel_source_excerpt(tmp_path):
+    out, storage, _, _ = _curated_site(tmp_path)
+    build_site_from_storage(storage, out)
+    page = (out / 'index.html').read_text()
+    assert 'No model curation available yet.' in page
+    assert 'Model summary' not in page
+    assert 'Read curation Markdown' not in page
+
+
+def test_cli_and_api_publish_the_configured_public_analysis(tmp_path):
+    from fastapi.testclient import TestClient
+    from paperflow_api import create_app
+    from paperflow_publish_site import build_site
+    from paperflow_settings import ResearchSettings
+    import time
+
+    out, storage, assistant, _ = _curated_site(tmp_path)
+    config = tmp_path / 'config.yaml'
+    config.write_text(f'research:\n  storage:\n    path: {storage.settings.path}\n'
+                      f'  assistant:\n    enabled: true\n    path: {assistant.path}\n')
+    build_site(str(config), out)
+    assert 'Model summary' in (out / 'index.html').read_text()
+
+    token = tmp_path / 'token'
+    token.write_text('test-build-token-' * 3)
+    settings = ResearchSettings(storage=storage.settings, monitor={'enabled': False},
+        assistant={'enabled': True, 'path': assistant.path},
+        publishing={'build_api_enabled': True, 'build_token_file': token, 'releases_dir': tmp_path/'releases'})
+    headers = {'Authorization': 'Bearer ' + token.read_text()}
+    with TestClient(create_app(settings)) as client:
+        job = client.post('/api/publish/builds', headers=headers).json()
+        for _ in range(200):
+            job = client.get('/api/publish/builds/' + job['id'], headers=headers).json()
+            if job['status'] != 'running':
+                break
+            time.sleep(.01)
+        assert job['status'] == 'succeeded'
+        page = (settings.publishing.releases_dir/job['release_id']/'index.html').read_text()
+        assert 'Model summary' in page
+        assert 'Read curation Markdown' in page
+
+
+def test_shared_items_have_unique_row_anchors_and_one_document(tmp_path):
+    import re
+    out, storage, assistant, item = _curated_site(tmp_path)
+    with storage.transaction(write=True) as repo:
+        persist_batch_in_repository(repo, IngestBatch(channel='another-channel',
+            config=ChannelConfig(url='https://example.com/another-feed', kind='paper'),
+            entries=(SourceEntry(source_id='same-paper', title=item.title, url=item.canonical_url),)))
+    build_site_from_storage(storage, out, assistant_store=assistant)
+    page = (out / 'index.html').read_text()
+    ids = re.findall(r'\bid="([^"]+)"', page)
+    assert len(ids) == len(set(ids))
+    assert page.count(f'id="curation-{item.id}"') == 1

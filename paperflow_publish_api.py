@@ -44,7 +44,8 @@ class BuildService:
     Status receipts survive process restarts. Interrupted jobs are recovered on
     read or the next build request without exposing incomplete staging output.
     """
-    def __init__(self, storage, settings):
+    def __init__(self, storage, settings, assistant_settings=None):
+        self.assistant_settings = assistant_settings
         self.storage = storage
         self.settings = settings
         self.releases = settings.releases_dir
@@ -132,8 +133,10 @@ class BuildService:
         try:
             self.releases.mkdir(parents=True, exist_ok=True)
             staging = Path(tempfile.mkdtemp(prefix='.staging-', dir=self.releases.parent))
+            from paperflow_publish_site import _assistant_store
+            assistant = _assistant_store(self.assistant_settings) if self.assistant_settings else None
             manifest = build_site_from_storage(self.storage, staging,
-                workspace_url=self.settings.workspace_url)
+                workspace_url=self.settings.workspace_url, assistant_store=assistant)
             manifest['release_id'] = job.id.hex
             manifest['index_sha256'] = hashlib.sha256((staging / 'index.html').read_bytes()).hexdigest()
             _write_json(staging / 'build.json', manifest)
@@ -147,6 +150,9 @@ class BuildService:
             self._save(job.model_copy(update={'status': 'succeeded', 'release_id': job.id.hex,
                                              'build_id': manifest['build_id']}))
         except Exception:
+            if staging:
+                shutil.rmtree(staging, ignore_errors=True)
+                staging = None
             self._save(job.model_copy(update={'status': 'failed', 'error': 'Static build failed.'}))
         finally:
             if staging:

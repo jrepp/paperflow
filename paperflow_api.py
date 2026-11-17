@@ -33,7 +33,7 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
     publisher = None
     if settings.publishing.build_api_enabled:
         from paperflow_publish_api import BuildService
-        publisher = BuildService(storage, settings.publishing)
+        publisher = BuildService(storage, settings.publishing, settings.assistant)
 
     @asynccontextmanager
     async def lifespan(app):
