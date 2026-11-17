@@ -24,6 +24,9 @@ jobs:
         run: |
           sed '/^#/d; /^$/d' .toolchain.env >> "$GITHUB_OUTPUT"
           sed '/^#/d; /^$/d' .toolchain.env >> "$GITHUB_ENV"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ steps.tools.outputs.UV_PYTHON }}
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           version: ${{ steps.tools.outputs.UV_VERSION }}
@@ -35,7 +38,7 @@ jobs:
           cache: npm
       - name: Install pinned secret scanner
         run: |
-          go install "github.com/gitleaks/gitleaks/v8@v$GITLEAKS_VERSION"
+          go install -ldflags "-X github.com/zricethezav/gitleaks/v8/version.Version=$GITLEAKS_VERSION" "github.com/zricethezav/gitleaks/v8@v$GITLEAKS_VERSION"
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Install locked dependencies
         run: ./scripts/bootstrap
@@ -62,6 +65,9 @@ jobs:
         run: |
           sed '/^#/d; /^$/d' .toolchain.env >> "$GITHUB_OUTPUT"
           sed '/^#/d; /^$/d' .toolchain.env >> "$GITHUB_ENV"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ steps.tools.outputs.UV_PYTHON }}
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           version: ${{ steps.tools.outputs.UV_VERSION }}
