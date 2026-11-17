@@ -370,6 +370,9 @@ def test_budget_failure_has_exact_limit_and_persisted_diagnostics(tmp_path, capl
     from pydantic_ai.usage import UsageLimits
     settings, storage, item, rev, output = fixture(tmp_path)
     def exhaust(ctx, item):
+        # A recovered decision-tool error must not replace the terminal failure.
+        ctx.failure = {'category': 'execution', 'limit': 'stale'}
+        ctx.failure_exception = ValueError('previous tool error')
         ctx.usage.input_tokens = 127416
         ctx.usage.output_tokens = 3109
         ctx.usage.requests = 7

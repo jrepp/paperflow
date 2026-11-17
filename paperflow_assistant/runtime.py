@@ -81,6 +81,7 @@ class Context:
     usage: RunUsage
     decisions: dict = field(default_factory=dict)
     failure: dict | None = None
+    failure_exception: Exception | None = None
 
 
 def attach_tools(agent):
@@ -199,6 +200,7 @@ def attach_tools(agent):
                 usage_limits=limits(deps.settings), timeout=deps.settings.timeout_seconds)
         except Exception as exc:
             deps.failure = failure_details(exc, deps.settings, deps.usage, 'decision')
+            deps.failure_exception = exc
             raise
         decision_id = str(uuid4())
         record = {'id': decision_id, 'depth': depth, 'request': request.model_dump(mode='json'),
@@ -404,7 +406,7 @@ class AssistantWorker:
             return {'id': job['id'], 'status': 'succeeded', 'attempt': job['attempts']}
         except Exception as exc:
             usage = usage_snapshot(context.usage) if context else {}
-            detail = (context.failure if context else None) or failure_details(
+            detail = (context.failure if context and context.failure_exception is exc else None) or failure_details(
                 exc, self.settings, context.usage if context else RunUsage())
             detail['retry_scheduled'] = job['attempts'] < self.settings.max_attempts
             detail['retry_delay_seconds'] = self.settings.retry_seconds*job['attempts'] if detail['retry_scheduled'] else None
