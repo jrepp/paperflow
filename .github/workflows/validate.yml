@@ -75,3 +75,18 @@ jobs:
           python-version: ${{ steps.tools.outputs.UV_PYTHON }}
           enable-cache: true
       - run: ./scripts/check integration
+
+  status:
+    name: PR Status Check
+    if: always()
+    needs: [checks, integration]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require every validation job to succeed
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+        run: |
+          test "$CHECKS_RESULT" = success
+          test "$INTEGRATION_RESULT" = success

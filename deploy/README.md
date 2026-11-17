@@ -56,7 +56,7 @@ credentials unless that endpoint is intentionally public information.
 
 ## Validated nightly and release bundles
 
-The Deployable release workflow runs at 09:23 UTC each night, on published
+The Deployable release workflow runs on every main merge, at 09:23 UTC each night, on published
 `vX.Y.Z` releases, and on manual dispatch. It runs the complete validation workflow
 (including browser, packaging, and Docker integration checks) against the exact
 commit before building a Linux amd64 container. A real HTTP smoke test checks

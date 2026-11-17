@@ -130,8 +130,9 @@ The 0.1.0 manifest is a starting baseline, not evidence of an already published 
 - Set the repository variable `RELEASE_AUTOMATION_ENABLED=true` after configuring
   the bot token and permissions. Push-triggered release automation stays disabled
   until then; manual dispatch validates the token explicitly.
-- Require Validate's local-check/package and Docker-integration jobs through
-  branch protection/rulesets. Workflow files alone cannot enable branch rules.
+- Require the aggregate **PR Status Check** through a GitHub ruleset. It fails
+  unless both local checks/package and Docker integration succeed. The Mergify
+  queue reruns these checks on speculative combinations before merging.
 - A bot token is intentional: events created using the default GITHUB_TOKEN do
   not trigger the follow-on PR/tag workflows. See the
   [Release Please action documentation](https://github.com/googleapis/release-please-action).
@@ -176,3 +177,45 @@ content scanners do not establish that author emails or images are private-data 
 Use a GitHub noreply email for new commits. Keep local credentials, private keys,
 databases, reports, and machine-specific overrides in ignored files. Never use
 ignore rules as a substitute for removing secrets already committed to history.
+
+## Speculative merge queue and automatic deployment
+
+Paperflow follows the Prism merge-queue pattern: squash merges, an approving
+review, successful CI, no requested changes, and no draft or blocking labels.
+The repository owner's PRs receive Mergify approval after validation; other
+contributors require a review. The `do-not-merge` and `work-in-progress` labels
+hold a change out of the queue.
+
+The root `.mergify.yml` uses a cumulative serial queue with two speculative
+checks running concurrently, batches of up to five PRs, and at most one minute
+of batch collection. Serial mode preserves merge ordering while checking later
+combinations ahead of time. Explicit queue actions avoid depending on the
+separate Merge Protections auto-merge product. See the
+[Mergify queue modes documentation](https://docs.mergify.com/merge-queue/queue-modes/).
+
+The **PR Status Check** job always runs and fails if either validation job fails,
+is cancelled, or is skipped. CI also runs on Mergify's temporary draft PRs.
+Keep validation free of path filters and draft exclusions that could leave queue
+checks missing. Each pull request has its own concurrency group, so speculative
+runs do not cancel one another.
+
+Every merge to main starts the Deployable release workflow automatically. It
+validates the exact commit again before publishing the immutable image bundle.
+Non-release builds are limited to main; a build superseded by a newer main
+commit does not publish. The existing nightly and version-release triggers
+remain available. This deployment path does not require the optional Release
+Please token or variable: versioned releases remain separately configured.
+
+GitHub settings are separate from repository files. Install Mergify for this
+repository, enable squash merges and deletion of merged branches, and restrict
+main updates to Mergify through an active ruleset. Require **PR Status Check**
+from the GitHub Actions app and an approving review. Mergify is the ruleset's
+exempt integration actor and repeats the checks and review requirements in its
+queue configuration. Block force pushes and deletion. Leave GitHub's native
+merge queue and strict up-to-date checks disabled; Mergify owns speculative
+validation. Never bypass a failed queue check to deploy a feature.
+
+Host-side consumers verify bundle checksums, preflight the image, check running
+identity/readiness, and roll back failed activation. Static publication uses an
+atomic switch after build and digest verification. These controls and host
+credentials remain in the external deployment repository.

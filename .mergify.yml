@@ -1,0 +1,55 @@
+# Cumulative speculative checks: each batch includes changes ahead of it.
+merge_queue:
+  mode: serial
+  max_parallel_checks: 2
+
+queue_rules:
+  - name: default
+    batch_size: 5
+    batch_max_wait_time: 1min
+    queue_conditions:
+      - base=main
+      - -draft
+      - label!=do-not-merge
+      - label!=work-in-progress
+      - check-success=PR Status Check
+      - "#approved-reviews-by>=1"
+      - "#changes-requested-reviews-by=0"
+    merge_conditions:
+      - check-success=PR Status Check
+      - "#approved-reviews-by>=1"
+      - "#changes-requested-reviews-by=0"
+      - label!=do-not-merge
+      - label!=work-in-progress
+    merge_method: squash
+    commit_message_format:
+      title: pr-title
+      body: pr-body
+
+pull_request_rules:
+  # Match Prism's trusted-owner policy; other authors need an approval.
+  - name: Approve validated owner changes
+    conditions:
+      - author=jrepp
+      - base=main
+      - -draft
+      - check-success=PR Status Check
+      - "#changes-requested-reviews-by=0"
+    actions:
+      review:
+        type: APPROVE
+        message: Automatically approving validated repository-owner changes.
+
+  # Explicit queue action also works without the separate Merge Protections product.
+  - name: Queue approved changes
+    conditions:
+      - base=main
+      - -draft
+      - label!=do-not-merge
+      - label!=work-in-progress
+      - check-success=PR Status Check
+      - "#approved-reviews-by>=1"
+      - "#changes-requested-reviews-by=0"
+    actions:
+      queue:
+        name: default
