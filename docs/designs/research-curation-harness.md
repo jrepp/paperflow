@@ -3,6 +3,7 @@ title: "Research curation harness and assistant prompt"
 project_id: paperflow
 doc_uuid: 762b3ef2-6367-460f-a189-27c60be6c381
 tags: [designs, curation]
+implements: [reader-acceptance]
 ---
 
 # Research curation harness and assistant prompt
@@ -10,6 +11,9 @@ tags: [designs, curation]
 The optional model harness runs under the integration monitor. It is disabled by
 default. Keyword curation remains the default when model curation is disabled.
 The packaged prompt lives in `paperflow_assistant/prompt.txt`.
+
+Acceptance references: reader-acceptance::FR-7, reader-acceptance::FR-8,
+reader-acceptance::FR-9, reader-acceptance::FR-10, and reader-acceptance::FR-11.
 
 ## Responsibilities and execution
 
@@ -112,7 +116,8 @@ file. Deployment must inject the selected values. Settings serialization exclude
 both key fields. Provider URLs and model IDs remain configurable.
 
 Default limits are 100 attempts per UTC day, 3 attempts per job, 12 model requests,
-40 tool calls, 60,000 reported tokens, 12 decision calls, and 3 decision layers.
+40 tool calls, 120,000 reported tokens, 16,000 output tokens per reasoning request,
+12 decision calls, and 3 decision layers.
 The reasoner has a 240-second timeout. Sampled evaluation has a separate 60-second
 timeout, two-request limit, and 32,000-token budget so curation cannot consume its
 allocation. Token limits are checked between requests, so a final response can

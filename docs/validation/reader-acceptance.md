@@ -24,6 +24,11 @@ without skips or expected failures. `scripts/check code` runs the backend gate w
 | reader-acceptance::AC-4 | reader-acceptance::FR-4 | covered | tests/acceptance/test_journeys.py::test_review_evidence | — | FastAPI and on-disk SQLite journey. |
 | reader-acceptance::AC-5 | reader-acceptance::FR-5 | covered | tests/acceptance/test_reader_state.py::test_saved_position_preferences_and_old_revision_survive_restart | reader.spec.js::browse, save, read, return, and resume in a new browser context | SQLite restart and backup tests plus the real browser save and resume journey. |
 | reader-acceptance::AC-6 | reader-acceptance::FR-6 | unresolved | — | — | Browser surface and automated accessibility checks exist; manual screen-reader and native zoom verification remain open. |
+| reader-acceptance::AC-7 | reader-acceptance::FR-7 | covered | tests/test_assistant.py::test_monitor_runs_curator_and_keeps_ingestion_pool_separate | — | Monitor lifecycle with an injected offline model runner and a dedicated worker pool. |
+| reader-acceptance::AC-8 | reader-acceptance::FR-8 | covered | tests/test_assistant.py::test_memory_replay_versions_search_and_exclusion | — | Versioned private storage, conflict handling, retrieval, and public API exclusion. |
+| reader-acceptance::AC-9 | reader-acceptance::FR-9 | covered | tests/test_assistant.py::test_request_ledger_preserves_failures_retries_and_spend | — | Mixed request outcomes, retry costs, unknown usage, and incomplete projections. |
+| reader-acceptance::AC-10 | reader-acceptance::FR-10 | covered | tests/test_assistant.py::test_quality_intervals_and_empty_samples | curation-monitor.spec.js::curation monitor distinguishes volume from sampled estimated quality | Empty estimates and small-sample intervals; browser checks model-estimate labels and sample coverage. |
+| reader-acceptance::AC-11 | reader-acceptance::FR-11 | covered | tests/test_assistant.py::test_bad_citations_and_evidence_basis_do_not_complete_jobs | — | Fabricated quotes and incorrect evidence basis cannot complete a job. |
 <!-- acceptance-coverage:end -->
 
 Covered means an executable test exists; only a successful run establishes a passing result.

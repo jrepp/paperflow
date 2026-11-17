@@ -41,5 +41,41 @@
     "disposition": "unresolved",
     "test": "",
     "reason": "Browser surface and automated accessibility checks exist; manual screen-reader and native zoom verification remain open."
+  },
+  {
+    "criterion": "AC-7",
+    "requirement": "FR-7",
+    "disposition": "covered",
+    "test": "tests/test_assistant.py::test_monitor_runs_curator_and_keeps_ingestion_pool_separate",
+    "reason": "Monitor lifecycle with an injected offline model runner and a dedicated worker pool."
+  },
+  {
+    "criterion": "AC-8",
+    "requirement": "FR-8",
+    "disposition": "covered",
+    "test": "tests/test_assistant.py::test_memory_replay_versions_search_and_exclusion",
+    "reason": "Versioned private storage, conflict handling, retrieval, and public API exclusion."
+  },
+  {
+    "criterion": "AC-9",
+    "requirement": "FR-9",
+    "disposition": "covered",
+    "test": "tests/test_assistant.py::test_request_ledger_preserves_failures_retries_and_spend",
+    "reason": "Mixed request outcomes, retry costs, unknown usage, and incomplete projections."
+  },
+  {
+    "criterion": "AC-10",
+    "requirement": "FR-10",
+    "disposition": "covered",
+    "test": "tests/test_assistant.py::test_quality_intervals_and_empty_samples",
+    "reason": "Empty estimates and small-sample intervals; browser checks model-estimate labels and sample coverage.",
+    "browser_test": "curation-monitor.spec.js::curation monitor distinguishes volume from sampled estimated quality"
+  },
+  {
+    "criterion": "AC-11",
+    "requirement": "FR-11",
+    "disposition": "covered",
+    "test": "tests/test_assistant.py::test_bad_citations_and_evidence_basis_do_not_complete_jobs",
+    "reason": "Fabricated quotes and incorrect evidence basis cannot complete a job."
   }
 ]

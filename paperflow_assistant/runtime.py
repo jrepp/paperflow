@@ -280,7 +280,7 @@ async def run_agent(context, item, reasoner, decision):
         model_settings={'timeout': 30, 'max_retries': 0}, retries=1)
     agent = Agent(MeteredModel(reasoner, context, 'reasoning'), deps_type=Context, output_type=Analysis, instructions=PROMPT,
         model_settings={'extra_body': {'thinking': {'type': 'enabled'}},
-                        'openai_reasoning_effort': 'high', 'max_tokens': 8000,
+                        'openai_reasoning_effort': 'high', 'max_tokens': settings.max_output_tokens,
                         'timeout': 90, 'max_retries': 0, 'parallel_tool_calls': False}, retries=2)
     attach_tools(agent)
 

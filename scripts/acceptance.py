@@ -75,7 +75,8 @@ def main():
     args = parser.parse_args()
     rows = coverage()
     gate = AcceptanceGate(rows)
-    result = pytest.main(['tests' if args.suite else 'tests/acceptance', '--ignore=tests/integration', '-q'], plugins=[gate])
+    paths = ['tests'] if args.suite else sorted({row['test'].split('::')[0] for row in rows if row['disposition'] == 'covered'})
+    result = pytest.main([*paths, '--ignore=tests/integration', '-q'], plugins=[gate])
     missing = gate.missing()
     browser_expected = {row['browser_test'] for row in rows if row.get('browser_test')}
     browser_missing = set()
