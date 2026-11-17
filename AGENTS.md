@@ -243,3 +243,16 @@ manifest together. Claim covered only with a runnable test; keep unimplemented
 journeys unresolved. Run `scripts/check acceptance` for focused feedback and
 `scripts/check` before handoff. Backend acceptance does not establish browser or
 accessibility readiness.
+
+## Completing deployed features
+
+When a feature for the deployed service is ready, deployment is part of completing
+it unless the user explicitly requests local-only work. Do not add a separate
+conversational approval gate. Use the validated release pipeline, verify the exact
+running commit and readiness, refresh the static publication, and check the public
+behavior before reporting completion.
+
+Preserve the previous working release until validation succeeds. Invest in missing
+validation, atomic promotion, health checks, and automatic rollback controls when
+needed for reliable deployment. Host-specific activation and rollback configuration
+remain in the external deployment repository; do not bypass failing release gates.
