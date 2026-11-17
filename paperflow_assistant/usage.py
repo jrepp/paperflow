@@ -2,6 +2,8 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 import time
+import json
+import logging
 from uuid import uuid4
 
 from pydantic_ai.models.wrapper import WrapperModel
@@ -25,6 +27,9 @@ def estimate_cost(usage, prices, requested_model, at):
     return str(total), 'peak' if peak else 'off_peak'
 
 
+logger = logging.getLogger('paperflow.curation')
+
+
 class MeteredModel(WrapperModel):
     def __init__(self, wrapped, context, role):
         super().__init__(wrapped)
@@ -38,11 +43,16 @@ class MeteredModel(WrapperModel):
         prices = ctx.settings.reasoning_prices if self.role == 'reasoning' else ctx.settings.decision_prices
         requested = ctx.settings.reasoning_model if self.role == 'reasoning' else ctx.settings.decision_model
         ctx.store.start_request(request_id, ctx.job['id'], ctx.job['attempts'], self.role, requested, started)
+        logger.info(json.dumps({'event': 'curation.request.started', 'run_id': ctx.job['id'],
+            'attempt': ctx.job['attempts'], 'request_id': request_id, 'role': self.role, 'model': requested}))
         try:
             response = await super().request(messages, model_settings, model_request_parameters)
         except BaseException as exc:
             ctx.store.finish_request(request_id, {'status': 'failed', 'error_type': type(exc).__name__,
                 'duration_seconds': time.time()-started, 'usage': None, 'estimated_usd': None})
+            logger.warning(json.dumps({'event': 'curation.request.failed', 'run_id': ctx.job['id'],
+                'attempt': ctx.job['attempts'], 'request_id': request_id, 'role': self.role,
+                'model': requested, 'error_type': type(exc).__name__, 'duration_seconds': time.time()-started}))
             raise
         usage = {key: getattr(response.usage, key, 0) for key in
                  ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens')}
@@ -51,4 +61,7 @@ class MeteredModel(WrapperModel):
             'duration_seconds': time.time()-started, 'usage': usage, 'estimated_usd': cost,
             'price_tier': tier, 'prices': prices.model_dump(),
             'cost_basis': 'Configured token prices at request start; not an invoice.'})
+        logger.info(json.dumps({'event': 'curation.request.finished', 'run_id': ctx.job['id'],
+            'attempt': ctx.job['attempts'], 'request_id': request_id, 'role': self.role, 'model': requested,
+            'duration_seconds': time.time()-started, 'usage': usage, 'estimated_usd': cost}))
         return response

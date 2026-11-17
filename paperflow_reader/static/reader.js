@@ -245,6 +245,14 @@ async function sources(generation) {
           return `<li>${esc(name)}: ${g.passed} / ${g.n} passed (${Math.round(g.pass_rate*100)}%). Estimated interval: ${Math.round(bounds[0]*100)}–${Math.round(bounds[1]*100)}%.</li>`;
         }).join('');
         curator.innerHTML=`<h2>Research curation</h2><dl class="monitor-metrics"><div><dt>Completed / eligible</dt><dd>${counts.succeeded||0} / ${curation.eligible_jobs||0}</dd></div><div><dt>Queued / running</dt><dd>${counts.queued||0} / ${counts.running||0}</dd></div><div><dt>Failed / retries</dt><dd>${counts.failed||0} / ${curation.retries||0}</dd></div><div><dt>Open follow-ups</dt><dd>${curation.active_memory?.follow_up||0}</dd></div></dl><p>Counts refer to source revisions and harness configurations.</p><p>${curation.valid_quote_citations||0} exact citation matches. Matches establish provenance, not factual correctness.</p><p>Quality sample: ${quality.sample_evaluated||0} evaluated / ${quality.sample_selected||0} selected. Evaluation errors: ${quality.evaluation_errors||0}.</p>${groups?`<ul>${groups}</ul>`:'<p>Quality estimate unavailable: no completed evaluations.</p>'}<p class="muted">Model-estimated quality. Human-calibrated accuracy is unknown.</p>`;
+        const diagnostic=curation.diagnostics;
+        if(diagnostic){
+          const failures=Object.entries(diagnostic.failure_groups||{}).map(([key,count])=>`<li>${esc(key)}: ${count}</li>`).join('');
+          const latest=diagnostic.recent_failures?.[0],detail=latest?.failure;
+          const lastSuccess=diagnostic.last_success_at?new Date(diagnostic.last_success_at*1000).toISOString():'none recorded';
+          const limit=detail?`${esc(detail.phase)} · ${esc(detail.limit||'unknown limit')}: ${detail.observed??'unknown'} / ${detail.configured_limit??'unknown'} (${esc(detail.measurement)})`:'Exact limit unavailable for this historical failure.';
+          curator.insertAdjacentHTML('beforeend',`<h3>Execution diagnostics</h3><p>Last 24 hours: ${diagnostic.failed_attempts} failed / ${diagnostic.completed_attempts} finished attempts. Consecutive failures: ${diagnostic.consecutive_failures_in_window}.</p><p>Daily attempts: ${diagnostic.daily_attempts_used} / ${diagnostic.daily_attempt_limit}. Queue: ${esc(diagnostic.queue_blocked_reason||'eligible work available')}. Last successful analysis: ${esc(lastSuccess)}.</p>${failures?`<ul>${failures}</ul>`:''}${latest?`<p>Latest failure: ${esc(latest.error_type)}. ${limit}</p>`:''}<p class="muted">Token caps count cumulative input and output across turns, including repeated context. Budget failures degrade curation; service readiness is reported separately.</p>`);
+        }
         const spend=curation.spend;
         if(spend){
           const money=value=>value==null?'Unknown':`$${Number(value).toFixed(6)}`;

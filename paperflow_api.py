@@ -145,6 +145,11 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
             return JSONResponse({"healthy": False, "error": "Monitor storage unavailable"}, status_code=503)
         return JSONResponse(health, status_code=200 if health["healthy"] else 503)
 
+    @app.get('/health/curation', tags=['health'])
+    def curation_health():
+        health = monitor.health()['curation'] if settings.monitor.enabled else {'enabled': False, 'healthy': True}
+        return JSONResponse(health, status_code=200 if health['healthy'] else 503)
+
     @app.get("/api/monitor/channels", response_model=list[MonitoredChannel])
     def channels():
         if not settings.monitor.enabled:
@@ -164,6 +169,7 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
             return {"enabled": False}
         return {"enabled": True, **monitor.assistant.store.metrics(),
                 "spend": monitor.assistant.store.spend(days, planned_items_per_day),
+                "diagnostics": monitor.assistant.store.diagnostics(settings.assistant),
                 "schedule": {"interval_seconds": settings.assistant.interval_seconds,
                              "items_per_cycle": settings.assistant.items_per_cycle,
                              "daily_attempt_limit": settings.assistant.daily_attempt_limit}}

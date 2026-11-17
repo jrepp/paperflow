@@ -99,7 +99,7 @@ class AssistantStore:
             if row is None:
                 return None
             conn.execute("INSERT OR REPLACE INTO assistant_meta VALUES (?,?)", ('attempts:'+today, str(count+1)))
-            conn.execute("UPDATE assistant_jobs SET status='running',attempts=attempts+1,started_at=? WHERE id=?", (time.time(), row['id']))
+            conn.execute("UPDATE assistant_jobs SET status='running',attempts=attempts+1,started_at=?,error=NULL,usage=NULL,finished_at=NULL,duration=NULL WHERE id=?", (time.time(), row['id']))
             conn.execute("INSERT INTO assistant_attempts (job_id,attempt,status,started_at) VALUES (?,?,'running',?)",
                          (row['id'], row['attempts']+1, time.time()))
             return dict(conn.execute("SELECT * FROM assistant_jobs WHERE id=?", (row['id'],)).fetchone())
@@ -120,9 +120,9 @@ class AssistantStore:
 
     def fail(self, job, error, settings, duration, usage=None):
         with self.connection(True) as conn:
-            conn.execute("""UPDATE assistant_jobs SET status=?,error=?,finished_at=?,duration=?,available_at=? WHERE id=?""",
+            conn.execute("""UPDATE assistant_jobs SET status=?,error=?,finished_at=?,duration=?,available_at=?,usage=? WHERE id=?""",
                          ('queued' if job['attempts'] < settings.max_attempts else 'failed',
-                          error, time.time(), duration, time.time()+settings.retry_seconds * job['attempts'], job['id']))
+                          error, time.time(), duration, time.time()+settings.retry_seconds * job['attempts'], encode(usage or {}), job['id']))
             conn.execute("UPDATE assistant_attempts SET status='failed',finished_at=?,usage=?,error=? WHERE job_id=? AND status='running'",
                          (time.time(), encode(usage or {}), error, job['id']))
 
@@ -287,6 +287,42 @@ class AssistantStore:
                 value.pop('output')
             result.append(value)
         return result
+
+    def diagnostics(self, settings):
+        now = time.time()
+        today = datetime.fromtimestamp(now, UTC).date().isoformat()
+        with self.connection() as conn:
+            rows = conn.execute("SELECT job_id,attempt,status,finished_at,error,usage FROM assistant_attempts WHERE finished_at>=? ORDER BY finished_at DESC", (now-86400,)).fetchall()
+            last_success = conn.execute("SELECT MAX(finished_at) FROM assistant_attempts WHERE status='succeeded'").fetchone()[0]
+            used = conn.execute("SELECT value FROM assistant_meta WHERE key=?", ('attempts:'+today,)).fetchone()
+            next_job = conn.execute("SELECT MIN(available_at) FROM assistant_jobs WHERE status='queued' AND attempts<?", (settings.max_attempts,)).fetchone()[0]
+        groups, recent, consecutive = {}, [], 0
+        for row in rows:
+            if row['status'] != 'failed':
+                continue
+            usage = json.loads(row['usage'] or '{}')
+            detail = usage.get('failure')
+            key = row['error']+':'+(detail.get('limit') or 'unknown') if detail else row['error']+':unknown'
+            groups[key] = groups.get(key, 0)+1
+            if len(recent) < 10:
+                recent.append({'run_id': row['job_id'], 'attempt': row['attempt'], 'at': row['finished_at'],
+                               'error_type': row['error'], 'failure': detail})
+        for row in rows:
+            if row['status'] != 'failed':
+                break
+            consecutive += 1
+        used = int(used[0]) if used else 0
+        blocked = 'empty' if next_job is None else 'daily_limit' if used >= settings.daily_attempt_limit else 'retry_backoff' if next_job > now else None
+        reset_at = now-now%86400+86400
+        if blocked == 'daily_limit':
+            next_job = max(next_job, reset_at)
+        return {'window_hours': 24, 'failed_attempts': sum(groups.values()),
+                'completed_attempts': len(rows), 'failure_groups': groups, 'recent_failures': recent,
+                'consecutive_failures_in_window': consecutive, 'last_success_at': last_success,
+                'daily_attempts_used': used, 'daily_attempt_limit': settings.daily_attempt_limit,
+                'daily_reset_at': reset_at,
+                'next_eligible_at': next_job, 'queue_blocked_reason': blocked,
+                'legacy_note': 'Historical exception types without diagnostics have unknown exact limits.'}
 
     def metrics(self):
         with self.connection() as conn:

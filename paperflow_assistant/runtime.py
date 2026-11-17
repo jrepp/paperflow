@@ -8,6 +8,7 @@ import os
 import time
 import functools
 import inspect
+import logging
 from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
 
 from pydantic_ai import Agent, ModelRetry, RunContext
@@ -18,6 +19,7 @@ from pydantic_ai.providers.typesafe import TypeSafeProvider
 from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.usage import RunUsage, UsageLimits
 
+from paperflow_assistant.diagnostics import failure_details, usage_snapshot, budget_snapshot
 from paperflow_assistant.models import Analysis, DecisionRequest, Judgment, MemoryInput, QualityJudgment
 from paperflow_assistant.quality import EVALUATOR_VERSION, validate_analysis, validate_citations
 from paperflow_assistant.store import AssistantStore
@@ -26,6 +28,8 @@ from paperflow_curation import (CurationService, Annotate, AddClaim, AddEvidence
                                AddIdentifier, Review, ChangeBucket, ChangeMember, SupersedeClaim)
 from paperflow_domain import ContentRevision, ResearchBucket, BucketMembership, Claim
 from paperflow_storage_sqlite import SQLiteResearchStorage
+
+logger = logging.getLogger('paperflow.curation')
 
 PROMPT = files('paperflow_assistant').joinpath('prompt.txt').read_text()
 TASK = ('Analyze this single source revision and return the Analysis output. '
@@ -76,6 +80,7 @@ class Context:
     decision_agent: object
     usage: RunUsage
     decisions: dict = field(default_factory=dict)
+    failure: dict | None = None
 
 
 def attach_tools(agent):
@@ -90,6 +95,8 @@ def attach_tools(agent):
                 return result
             except Exception as exc:
                 ctx.deps.store.record_tool(ctx.deps.job['id'], function.__name__, type(exc).__name__)
+                logger.warning(json.dumps({'event': 'curation.tool.failed', 'run_id': ctx.deps.job['id'],
+                    'attempt': ctx.deps.job['attempts'], 'tool': function.__name__, 'error_type': type(exc).__name__}))
                 from paperflow_curation import NotFoundError
                 from paperflow_storage import ConflictError, ReferenceError
                 if isinstance(exc, (ValueError, NotFoundError, ConflictError, ReferenceError)):
@@ -173,16 +180,26 @@ def attach_tools(agent):
         """Ask Jev one bounded question. Parent IDs express dependencies for N-layer decisions."""
         deps = ctx.deps
         if len(deps.decisions) >= deps.settings.decision_limit:
+            logger.warning(json.dumps({'event': 'curation.decision.budget_refused', 'run_id': deps.job['id'],
+                'attempt': deps.job['attempts'], 'limit': 'decision_calls',
+                'configured_limit': deps.settings.decision_limit, 'observed': len(deps.decisions)+1}))
             raise ModelRetry('Decision call budget exhausted')
         if any(parent not in deps.decisions for parent in request.parent_ids):
             raise ModelRetry('Decision parents must come from this run')
         depth = 1 + max((deps.decisions[p]['depth'] for p in request.parent_ids), default=0)
         if depth > deps.settings.decision_depth:
+            logger.warning(json.dumps({'event': 'curation.decision.budget_refused', 'run_id': deps.job['id'],
+                'attempt': deps.job['attempts'], 'limit': 'decision_depth',
+                'configured_limit': deps.settings.decision_depth, 'observed': depth}))
             raise ModelRetry('Decision depth budget exhausted')
         validate_citations(request.citations, deps.storage)
-        result = await deps.decision_agent.run(json.dumps({'question': request.model_dump(mode='json'),
-            'parents': [deps.decisions[p] for p in request.parent_ids]}), usage=deps.usage,
-            usage_limits=limits(deps.settings), timeout=deps.settings.timeout_seconds)
+        try:
+            result = await deps.decision_agent.run(json.dumps({'question': request.model_dump(mode='json'),
+                'parents': [deps.decisions[p] for p in request.parent_ids]}), usage=deps.usage,
+                usage_limits=limits(deps.settings), timeout=deps.settings.timeout_seconds)
+        except Exception as exc:
+            deps.failure = failure_details(exc, deps.settings, deps.usage, 'decision')
+            raise
         decision_id = str(uuid4())
         record = {'id': decision_id, 'depth': depth, 'request': request.model_dump(mode='json'),
                   'result': result.output.model_dump(), 'model': response_model(result, deps.settings.decision_model)}
@@ -305,6 +322,8 @@ async def run_agent(context, item, reasoner, decision):
                                  usage_limits=limits(settings), timeout=settings.timeout_seconds)
         analysis = result.output
         validation = validate_analysis(analysis, rev, settings, context.storage)
+        curation_usage = usage_snapshot(context.usage)
+        audit_usage = RunUsage()
         # Stable hash sampling prevents cherry-picking and is reproducible across retries.
         selected = int(context.job['id'][:8], 16) / 0x100000000 < settings.evaluation_sample_rate
         evaluation = {'selected': selected, 'evaluator_version': EVALUATOR_VERSION, 'model': settings.decision_model}
@@ -326,11 +345,16 @@ async def run_agent(context, item, reasoner, decision):
                 evaluation.update(judgment=audit.output.model_dump(), model=response_model(audit, settings.decision_model))
             except Exception as exc:
                 evaluation['error'] = type(exc).__name__
+                evaluation['failure'] = failure_details(exc, settings, audit_usage, 'evaluation')
+                logger.warning(json.dumps({'event': 'curation.evaluation.failed', 'run_id': context.job['id'],
+                                           'failure': evaluation['failure']}))
             finally:
                 context.usage.incr(audit_usage)
         usage = context.usage
         receipt = {key: getattr(usage, key, 0) for key in ('input_tokens', 'output_tokens', 'requests', 'tool_calls')}
-        receipt.update(reasoning_model=response_model(result, settings.reasoning_model), prompt_version=PROMPT_VERSION)
+        receipt.update(reasoning_model=response_model(result, settings.reasoning_model), prompt_version=PROMPT_VERSION,
+                       phase_usage={'curation': curation_usage, 'evaluation': usage_snapshot(audit_usage)},
+                       budgets={'curation': budget_snapshot(settings), 'evaluation': budget_snapshot(settings, 'evaluation')})
         return analysis.model_dump(mode='json'), validation, evaluation, receipt
 
 
@@ -357,6 +381,8 @@ class AssistantWorker:
         if job is None:
             return None
         start = time.monotonic()
+        logger.info(json.dumps({'event': 'curation.attempt.started', 'run_id': job['id'],
+                               'attempt': job['attempts'], 'budgets': budget_snapshot(self.settings)}))
         context = None
         try:
             revision, item = self.store.document(job['revision_id'])
@@ -372,8 +398,20 @@ class AssistantWorker:
             validation = validate_analysis(analysis, context.revision, self.settings, self.storage)
             self.store.finish(job['id'], analysis.model_dump(mode='json'), validation,
                               output[2], output[3], time.monotonic()-start)
+            logger.info(json.dumps({'event': 'curation.attempt.finished', 'run_id': job['id'],
+                'attempt': job['attempts'], 'status': 'succeeded', 'duration_seconds': time.monotonic()-start,
+                'usage': {key: output[3].get(key, 0) for key in ('input_tokens', 'output_tokens', 'requests', 'tool_calls')}}))
             return {'id': job['id'], 'status': 'succeeded', 'attempt': job['attempts']}
         except Exception as exc:
-            usage = {key: getattr(context.usage, key, 0) for key in ('input_tokens', 'output_tokens', 'requests', 'tool_calls')} if context else {}
+            usage = usage_snapshot(context.usage) if context else {}
+            detail = (context.failure if context else None) or failure_details(
+                exc, self.settings, context.usage if context else RunUsage())
+            detail['retry_scheduled'] = job['attempts'] < self.settings.max_attempts
+            detail['retry_delay_seconds'] = self.settings.retry_seconds*job['attempts'] if detail['retry_scheduled'] else None
+            usage['failure'] = detail
+            logger.warning(json.dumps({'event': 'curation.attempt.failed', 'run_id': job['id'],
+                'attempt': job['attempts'], 'duration_seconds': time.monotonic()-start,
+                'will_retry': job['attempts'] < self.settings.max_attempts,
+                'retry_delay_seconds': detail['retry_delay_seconds'], 'failure': detail}))
             self.store.fail(job, type(exc).__name__, self.settings, time.monotonic()-start, usage)
-            return {'id': job['id'], 'status': 'failed', 'error': type(exc).__name__, 'attempt': job['attempts']}
+            return {'id': job['id'], 'status': 'failed', 'error': type(exc).__name__, 'attempt': job['attempts'], 'failure': detail}

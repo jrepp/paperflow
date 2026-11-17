@@ -64,6 +64,8 @@ class IntegrationMonitor:
         self._next_assistant_at = 0
         self.assistant_error = None
         self.last_assistant_run = None
+        self.assistant_failure = None
+        self._assistant_started_at = None
         self._heartbeat_pool = None
         self._heartbeat_future = None
         self._next_heartbeat_at = 0
@@ -144,12 +146,16 @@ class IntegrationMonitor:
                     if result:
                         self.last_assistant_run = result['id']
                         self.assistant_error = result.get('error')
+                        self.assistant_failure = result.get('failure')
                 except Exception as exc:
                     self.assistant_error = type(exc).__name__
+                    self.assistant_failure = None
                 self._assistant_future = None
+                self._assistant_started_at = None
             due = self.settings.monitor.schedule_enabled and time.time() >= self._next_assistant_at
             if self.assistant and self._assistant_future is None and not self._stop.is_set() and (due or self._curation_requested):
                 self._assistant_future = self._assistant_pool.submit(self._run_assistant)
+                self._assistant_started_at = time.time()
                 self._curation_requested = False
                 self._next_assistant_at = time.time() + self.settings.assistant.interval_seconds
 
@@ -159,13 +165,19 @@ class IntegrationMonitor:
                    time.time() - run.started_at.timestamp() > self.settings.monitor.run_timeout_seconds]
         tick_recent = self.last_tick is not None and time.time() - self.last_tick < max(
             5, self.settings.monitor.poll_seconds * 3 + self.settings.storage.busy_timeout_seconds)
-        healthy = self.accepting and tick_recent and not self.last_error and not self.topic_error and not self.assistant_error and not overdue
+        budget_failure = bool(self.assistant_failure and self.assistant_failure.get('category') == 'budget')
+        curation_overdue = bool(self._assistant_future and not self._assistant_future.done() and self._assistant_started_at
+            and time.time()-self._assistant_started_at > self.settings.assistant.items_per_cycle * (self.settings.assistant.timeout_seconds+60)+5)
+        healthy = self.accepting and tick_recent and not self.last_error and not self.topic_error and not overdue and not curation_overdue and (not self.assistant_error or budget_failure)
         return {"healthy": healthy, "enabled": self.settings.monitor.enabled,
                 "scheduler_running": self.accepting, "schedule_enabled": self.settings.monitor.schedule_enabled,
                 "telemetry": {"otlp_configured": bool(self.settings.telemetry.otlp_endpoint)}, "last_tick": self.last_tick,
                 "scheduler_error": self.last_error, "overdue_runs": overdue,
                 "heartbeat": dict(self.heartbeat_status),
                 "curation": {"enabled": self.settings.assistant.enabled,
+                             "healthy": not self.settings.assistant.enabled or (self.accepting and tick_recent and not self.last_error and not self.assistant_error and not curation_overdue),
+                             "degraded": bool(self.assistant_error), "overdue": curation_overdue,
+                             "failure": self.assistant_failure,
                              "running": bool(self._assistant_future and not self._assistant_future.done()),
                              "last_run": self.last_assistant_run, "error": self.assistant_error},
                 "topics": {"enabled": self.settings.topics.enabled, "running": bool(self._topic_future and not self._topic_future.done()),
@@ -254,6 +266,10 @@ class IntegrationMonitor:
                 span.set_attribute('curation.run_id', result['id'])
                 span.set_attribute('curation.status', result['status'])
                 self.telemetry.curation_runs.add(1, {'status': result['status']})
+                if result['status'] == 'failed':
+                    detail = result.get('failure') or {}
+                    self.telemetry.curation_failures.add(1, {'category': detail.get('category', 'unknown'),
+                        'limit': detail.get('limit') or 'unknown', 'phase': detail.get('phase', 'unknown')})
                 for request in self.assistant.store.request_metrics(result['id'], result['attempt']):
                     labels = {'role': request['role'], 'model': request['model']}
                     usage = request.get('usage') or {}

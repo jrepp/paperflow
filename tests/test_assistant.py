@@ -364,3 +364,88 @@ def test_trigger_coalesces_pending_requests_and_rejects_unavailable(tmp_path, mo
     settings.assistant.enabled = False
     with TestClient(create_app(settings)) as client:
         assert client.post('/api/monitor/curation/runs').status_code == 503
+
+
+def test_budget_failure_has_exact_limit_and_persisted_diagnostics(tmp_path, caplog):
+    from pydantic_ai.usage import UsageLimits
+    settings, storage, item, rev, output = fixture(tmp_path)
+    def exhaust(ctx, item):
+        ctx.usage.input_tokens = 127416
+        ctx.usage.output_tokens = 3109
+        ctx.usage.requests = 7
+        UsageLimits(total_tokens_limit=120000).check_tokens(ctx.usage)
+    worker = AssistantWorker(settings, runner=exhaust)
+    worker.initialize()
+    result = worker.tick()
+    detail = result['failure']
+    assert detail['limit'] == 'total_tokens'
+    assert detail['configured_limit'] == 120000 and detail['observed'] == 130525
+    assert detail['usage']['requests'] == 7
+    assert worker.store.runs()[0]['usage']['failure'] == detail
+    diagnostics = worker.store.diagnostics(settings.assistant)
+    assert diagnostics['failure_groups'] == {'UsageLimitExceeded:total_tokens': 1}
+    assert diagnostics['daily_attempts_used'] == 1
+    assert diagnostics['queue_blocked_reason'] == 'retry_backoff'
+    assert 'curation.attempt.failed' in caplog.text
+    assert '130525' in caplog.text
+
+
+def test_request_budget_is_projected_and_unknown_error_text_is_never_logged(tmp_path, caplog):
+    from paperflow_assistant.diagnostics import failure_details
+    from pydantic_ai.exceptions import UsageLimitExceeded
+    settings, *_ = fixture(tmp_path)
+    usage = RunUsage(requests=12)
+    exc = UsageLimitExceeded('The next request would exceed the request_limit of 12')
+    detail = failure_details(exc, settings.assistant, usage)
+    assert detail['observed'] == 13 and detail['usage']['requests'] == 12
+    assert detail['measurement'] == 'projected_next_request'
+    secret = 'private-token-and-internal-host'
+    assert secret not in json.dumps(failure_details(UsageLimitExceeded(secret), settings.assistant, usage))
+    def fail(ctx, item):
+        raise ValueError(secret)
+    worker = AssistantWorker(settings, runner=fail)
+    worker.initialize()
+    result = worker.tick()
+    assert secret not in caplog.text
+    assert secret not in json.dumps(result)
+    assert secret not in json.dumps(worker.store.runs())
+
+
+def test_budget_degrades_curation_but_not_readiness_or_process_heartbeat(tmp_path, monkeypatch):
+    settings, *_ = fixture(tmp_path)
+    monitor = IntegrationMonitor(settings)
+    with TestClient(create_app(settings, monitor=monitor)) as client:
+        monitor.assistant_error = 'UsageLimitExceeded'
+        monitor.assistant_failure = {'category': 'budget', 'limit': 'requests', 'configured_limit': 12, 'observed': 13}
+        assert client.get('/health/ready').status_code == 200
+        curation = client.get('/health/curation')
+        assert curation.status_code == 503
+        assert curation.json()['degraded']
+        from pydantic import SecretStr
+        settings.monitor.heartbeat_url = SecretStr('https://example.org/check')
+        calls = []
+        monkeypatch.setattr('paperflow_heartbeat.ping', lambda url, healthy: calls.append(healthy))
+        assert monitor._send_heartbeat() == 'success'
+        assert calls == [True]
+        monitor.assistant_failure = {'category': 'execution'}
+        assert client.get('/health/ready').status_code == 503
+        monitor.assistant_error = None
+        monitor.assistant_failure = None
+        from concurrent.futures import Future
+        monitor._assistant_future = Future()
+        monitor._assistant_started_at = time.time()-10000
+        assert client.get('/health/ready').status_code == 503
+        assert client.get('/health/curation').json()['overdue']
+
+
+@pytest.mark.parametrize('message,key,cap,observed', [
+    ('Exceeded the input_tokens_limit of 100 (input_tokens=101)', 'input_tokens', 100, 101),
+    ('Exceeded the output_tokens_limit of 100 (output_tokens=101)', 'output_tokens', 100, 101),
+    ('The next tool call(s) would exceed the tool_calls_limit of 40 (tool_calls=41).', 'tool_calls', 40, 41),
+])
+def test_sdk_limit_parser_allowlists_numeric_fields(tmp_path, message, key, cap, observed):
+    from paperflow_assistant.diagnostics import failure_details
+    from pydantic_ai.exceptions import UsageLimitExceeded
+    settings, *_ = fixture(tmp_path)
+    detail = failure_details(UsageLimitExceeded(message), settings.assistant, RunUsage())
+    assert (detail['limit'], detail['configured_limit'], detail['observed']) == (key, cap, observed)

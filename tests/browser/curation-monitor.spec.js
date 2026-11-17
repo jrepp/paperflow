@@ -3,6 +3,7 @@ import {test, expect} from '@playwright/test';
 test('curation monitor distinguishes volume from sampled estimated quality', async({page})=>{
   await page.route('**/api/monitor/curation', route=>route.fulfill({json:{enabled:true,
     counts:{succeeded:12,queued:3,running:1,failed:2},eligible_jobs:18,retries:4,
+    diagnostics:{failed_attempts:2,completed_attempts:14,consecutive_failures_in_window:1,daily_attempts_used:18,daily_attempt_limit:100,queue_blocked_reason:'retry_backoff',failure_groups:{'UsageLimitExceeded:total_tokens':2},recent_failures:[{error_type:'UsageLimitExceeded',failure:{phase:'curation',limit:'total_tokens',observed:130525,configured_limit:120000,measurement:'reported_usage'}}]},
     active_memory:{follow_up:5},valid_quote_citations:26,
     spend:{window_days:7,estimated_usd:'0.123456',estimated_usd_per_completed_job:'0.010288',retry_estimated_usd:'0.01',
       input_tokens:12000,output_tokens:3000,priced_requests:15,unpriced_requests:1,pending_requests:0,by_role_and_model:{}},
@@ -18,6 +19,9 @@ test('curation monitor distinguishes volume from sampled estimated quality', asy
   await expect(panel).toContainText('$0.123456');
   await expect(panel).toContainText('12000 / 3000');
   await expect(panel).toContainText('Unknown usage is not free');
+  await expect(panel).toContainText('130525 / 120000');
+  await expect(panel).toContainText('Daily attempts: 18 / 100');
+  await expect(panel).toContainText('retry_backoff');
 });
 
 test('curation monitor does not report perfect quality for an empty sample', async({page})=>{

@@ -280,7 +280,8 @@ quality checks. Internal research notes remain private.
 `GET /api/version` reports the installed package version, immutable commit,
 build timestamp, and build channel. Local builds can have unknown commit/time.
 `GET /health/live` checks process liveness. `GET /health/ready` checks storage,
-scheduler freshness, overdue runs, and current ingestion/curation errors.
+scheduler freshness, overdue runs, and execution errors. Curation budget failures
+are reported as degraded work without making the whole API unavailable.
 
 Set `PAPERFLOW_HEARTBEAT_URL` in private runtime configuration to enable
 Healthchecks-compatible POST pings. The monitor sends an empty success ping when
@@ -291,3 +292,36 @@ A dedicated worker bounds requests to five seconds; network failures do not bloc
 curation or ingestion. Redirects are rejected. Readiness includes the last
 acknowledged heartbeat time, signal, and sanitized error type. Stalled or stopped
 monitors stop pinging. Quality estimates remain separate from process health.
+
+
+## Curation failure diagnostics
+
+`GET /health/curation` reports curator health separately and returns 503 for an
+unresolved curation failure or overdue worker. A handled budget failure leaves
+`/health/ready` available, with `curation.degraded: true` and structured failure
+details. The process heartbeat follows readiness. Unexpected worker errors,
+stalled workers, stale scheduler ticks, and storage failures still fail readiness.
+This separation does not turn failed analyses into successful work or quality passes.
+
+`GET /api/monitor/curation` includes a 24-hour diagnostic summary: failures grouped
+by exception and limit, recent detailed failures, consecutive failures in the
+window, last success, UTC daily attempts used, and queue blocking reason (daily
+cap, retry backoff, or no eligible work). The Sources panel displays these details.
+Older failures have no exact limit recorded and are labeled unknown.
+
+New attempt receipts record the failed limit, its configured value, observed or
+projected usage, phase, usage counters, and a budget snapshot. For example,
+`total_tokens: 130525 / 120000` is a cumulative-token failure. A request failure
+can report projected request 13 against limit 12 while the usage ledger contains
+12 completed requests. Input tokens count repeated context across model turns;
+these limits are distinct from provider rate limits. A response can cross a token
+cap because its actual usage becomes known only after the provider returns it.
+
+Structured `curation.attempt.*`, `curation.request.*`, `curation.tool.failed`,
+`curation.decision.budget_refused`, and `curation.evaluation.failed` events include
+correlation IDs, phase/role, timing, safe usage counters, and retry disposition.
+Raw exception messages, source text, model output, credentials, and internal notes
+are excluded. The numeric SDK limit messages are parsed through an allowlist;
+unrecognized messages remain unknown. The OpenTelemetry counter
+`paperflow.curation.failures` uses bounded category, limit, and phase labels.
+Run IDs appear in logs and receipts, never as metric labels. Budgets are unchanged.
