@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from importlib.resources import files
 
 import pytest
 
@@ -61,10 +62,15 @@ def test_site_renders_channels_with_decay_and_manifest(tmp_path: Path) -> None:
     page = (out / "index.html").read_text(encoding="utf-8")
     assert "Fresh news item" in page and "Older news item" in page and "Fresh paper" in page
     assert "Stale news item" not in page
+    stylesheet = files("paperflow_reader").joinpath("static/reader.css").read_text()
+    assert "<style>" + stylesheet + "</style>" in page
+    assert '<link rel="stylesheet"' not in page
+    assert '<main id="main" class="shell py-8" tabindex="-1">' in page
+    assert '<a class="skip" href="#main">' in page
     assert "<a href=\"https://news.ycombinator.com/rss/0\">Fresh news item</a>" in page
     stored = json.loads((out / "build.json").read_text(encoding="utf-8"))
     assert stored["build_id"] == manifest["build_id"]
-    balanced = page.split("<ol>")[1].split("</ol>")[0]
+    balanced = page.split('<ol class="feed-list" role="list">')[1].split("</ol>")[0]
     assert balanced.index("Fresh news item") < balanced.index("Fresh paper") or balanced.index(
         "Fresh paper") < balanced.index("Older news item")
 
@@ -86,16 +92,16 @@ def test_site_balances_channels_and_survives_empty(tmp_path: Path) -> None:
     manifest = build_site_from_storage(seeded, tmp_path / "site", per_channel_limit=20, now=now)
     assert manifest["total_items"] == 40
     page = (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
-    latest = page.split("<ol>")[1].split("</ol>")[0]
-    order = [line for line in latest.split("<li>")[1:] if line.strip()]
-    assert page.count("<ol>") == 1
-    assert "<h2>" not in page
+    latest = page.split('<ol class="feed-list" role="list">')[1].split("</ol>")[0]
+    order = [line for line in latest.split('<li class="feed-row">')[1:] if line.strip()]
+    assert page.count('<ol class="feed-list"') == 1
+    assert page.count("<h2>") == manifest["total_items"]
     assert len(order) == manifest["total_items"]
     assert page.count('href="https://a.example/feed/0"') == 1
     assert page.count('href="https://b.example/feed/19"') == 1
     first_five = [entry.split("</a>")[0] for entry in order[:5]]
-    assert sum(name.startswith("<a href=\"https://a.example") for name in first_five) >= 2
-    assert sum(name.startswith("<a href=\"https://b.example") for name in first_five) >= 2
+    assert sum('href="https://a.example' in name for name in first_five) >= 2
+    assert sum('href="https://b.example' in name for name in first_five) >= 2
 
 
 def test_workspace_link_is_opt_in_and_escaped(tmp_path: Path) -> None:

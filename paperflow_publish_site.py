@@ -12,6 +12,7 @@ import html
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from importlib.resources import files
 
 from paperflow_settings import PublishingSettings, load_research_settings
 from paperflow_storage_sqlite import SQLiteResearchStorage
@@ -119,32 +120,37 @@ def _item_li(pair: tuple[datetime, object], now: datetime) -> str:
     title = html.escape(item.title)
     age = html.escape(_age_text(when, now))
     ref = f'<a href="{url}">{title}</a>' if url else title
-    meta = f" <span class=\"meta\">{host} · {age}</span>" if host else f" <span class=\"meta\">{age}</span>"
-    return f"<li>{ref}{meta}</li>"
+    meta = f"{host} · {age}" if host else age
+    return f'<li class="feed-row"><article><div class="meta item-meta">{meta}</div><h2>{ref}</h2></article></li>'
 
 
 def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None = None) -> str:
     now = datetime.fromtimestamp(manifest["epoch"], tz=timezone.utc)
     esc = html.escape
     latest = _balanced(sections)
+    # Embed the same packaged stylesheet as the interactive reader so published
+    # bundles work offline and never depend on a live application's asset route.
+    stylesheet = files("paperflow_reader").joinpath("static/reader.css").read_text(encoding="utf-8")
     parts = [
-        "<!doctype html><meta charset=\"utf-8\">",
-        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+        '<!doctype html><html lang="en"><head>',
+        '<meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
         "<title>Paperflow</title>",
-        "<style>",
-        "body{font:16px/1.6 system-ui,sans-serif;margin:0 auto;max-width:46rem;padding:1rem 1.25rem;color:#1a1a1a}",
-        "a{color:#0a5ad6;text-decoration:none}a:hover{text-decoration:underline}",
-        "h1{font-size:1.4rem;margin:.2rem 0}",
-        "ol{padding-left:1.5rem}li{margin:.75rem 0}.meta{color:#777;font-size:.85rem}",
-        ".sub{color:#666;margin:.1rem 0 0}.foot{margin-top:2rem;color:#888;font-size:.85rem;border-top:1px solid #ddd;padding-top:.6rem}",
-        "</style>",
-        "<h1>Paperflow</h1><p class=\"sub\">Recent reading from all sources.</p>",
+        "<style>" + stylesheet + "</style></head><body>",
+        '<a class="skip" href="#main">Skip to content</a>',
+        '<header class="masthead"><div class="shell topbar">'
+        '<a href="./" class="brand" aria-label="Paperflow home">Paperflow '
+        '<span aria-hidden="true">/</span></a></div></header>',
+        '<main id="main" class="shell py-8" tabindex="-1">',
+        '<div class="feed-toolbar"><h1>Latest</h1></div>',
+        '<p class="muted">Recent reading from all sources.</p>',
     ]
     if latest:
-        parts.append("<ol>" + "".join(_item_li(pair, now) for pair in latest) + "</ol>")
+        parts.append('<ol class="feed-list" role="list">' + "".join(_item_li(pair, now) for pair in latest) + "</ol>")
     else:
         parts.append("<p>No recent items yet.</p>")
+    parts.append("</main>")
     workspace_link = f' · <a href="{esc(workspace_url, quote=True)}">Open workspace</a>' if workspace_url else ""
-    parts.append('<p class="foot">Updated ' + now.strftime("%Y-%m-%d %H:%M UTC")
-                 + workspace_link + "</p>")
+    parts.append('<footer class="shell py-8 muted">Updated ' + now.strftime("%Y-%m-%d %H:%M UTC")
+                 + workspace_link + "</footer></body></html>")
     return "\n".join(parts)
