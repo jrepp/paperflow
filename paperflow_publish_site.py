@@ -83,18 +83,16 @@ def build_site_from_storage(storage: SQLiteResearchStorage, out_dir: str | Path,
     return manifest
 
 
-def _balanced(sections: list[dict], limit: int = 30) -> list[tuple]:
-    """Interleave channels round-robin so the top of the page shares exposure."""
+def _balanced(sections: list[dict]) -> list[tuple]:
+    """Interleave all selected items so each channel shares exposure."""
     queues = [list(section["items"]) for section in sections]
     merged: list[tuple] = []
-    while queues and len(merged) < limit:
+    while queues:
         for queue in list(queues):
             if not queue:
                 queues.remove(queue)
                 continue
             merged.append(queue.pop(0))
-            if len(merged) >= limit:
-                break
     return merged
 
 
@@ -132,27 +130,21 @@ def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None =
     parts = [
         "<!doctype html><meta charset=\"utf-8\">",
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
-        "<title>Paperflow — published channels</title>",
+        "<title>Paperflow</title>",
         "<style>",
         "body{font:16px/1.6 system-ui,sans-serif;margin:0 auto;max-width:46rem;padding:1rem 1.25rem;color:#1a1a1a}",
         "a{color:#0a5ad6;text-decoration:none}a:hover{text-decoration:underline}",
-        "h1{font-size:1.4rem;margin:.2rem 0}h2{font-size:1.05rem;margin:1.6rem 0 .4rem;color:#444}",
-        "ol,ul{padding-left:1.2rem}.meta{color:#777;font-size:.85rem}",
+        "h1{font-size:1.4rem;margin:.2rem 0}",
+        "ol{padding-left:1.5rem}li{margin:.75rem 0}.meta{color:#777;font-size:.85rem}",
         ".sub{color:#666;margin:.1rem 0 0}.foot{margin-top:2rem;color:#888;font-size:.85rem;border-top:1px solid #ddd;padding-top:.6rem}",
         "</style>",
-        "<h1>Paperflow</h1><p class=\"sub\">Published paperflow channels — balanced decay, refreshed every publish.</p>",
+        "<h1>Paperflow</h1><p class=\"sub\">Recent reading from all sources.</p>",
     ]
     if latest:
-        parts.append("<h2>Latest</h2><ol>" + "".join(_item_li(pair, now) for pair in latest) + "</ol>")
-    for section in sections:
-        name = esc(section["name"])
-        parts.append(f"<h2>{name} <span class=\"meta\">({len(section['items'])})</span></h2><ol>"
-                     + "".join(_item_li(pair, now) for pair in section["items"]) + "</ol>")
-    if not latest:
-        parts.append("<p>No published items inside the decay window yet.</p>")
+        parts.append("<ol>" + "".join(_item_li(pair, now) for pair in latest) + "</ol>")
+    else:
+        parts.append("<p>No recent items yet.</p>")
     workspace_link = f' · <a href="{esc(workspace_url, quote=True)}">Open workspace</a>' if workspace_url else ""
-    policy = manifest["policy"]
-    parts.append("<p class=\"foot\">Build " + esc(manifest["build_id"])
-                 + " · window " + str(policy["window_hours"]) + "h, cap " + str(policy["per_channel_limit"])
-                 + " per channel" + workspace_link + "</p>")
+    parts.append('<p class="foot">Updated ' + now.strftime("%Y-%m-%d %H:%M UTC")
+                 + workspace_link + "</p>")
     return "\n".join(parts)

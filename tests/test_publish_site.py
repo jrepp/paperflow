@@ -64,7 +64,7 @@ def test_site_renders_channels_with_decay_and_manifest(tmp_path: Path) -> None:
     assert "<a href=\"https://news.ycombinator.com/rss/0\">Fresh news item</a>" in page
     stored = json.loads((out / "build.json").read_text(encoding="utf-8"))
     assert stored["build_id"] == manifest["build_id"]
-    balanced = page.split("<h2>Latest</h2><ol>")[1].split("</ol>")[0]
+    balanced = page.split("<ol>")[1].split("</ol>")[0]
     assert balanced.index("Fresh news item") < balanced.index("Fresh paper") or balanced.index(
         "Fresh paper") < balanced.index("Older news item")
 
@@ -76,19 +76,23 @@ def test_site_balances_channels_and_survives_empty(tmp_path: Path) -> None:
     out = tmp_path / "empty-site"
     manifest = build_site_from_storage(storage, out, now=now)
     assert manifest["channels"] == [] and manifest["total_items"] == 0
-    assert "No published items inside the decay window yet." in (out / "index.html").read_text(encoding="utf-8")
+    assert "No recent items yet." in (out / "index.html").read_text(encoding="utf-8")
 
     seeded = _storage(tmp_path)
     _seed(seeded, [
-        _batch("channel-a", "https://a.example/feed", [(f"a{i}", now - timedelta(hours=1, minutes=i)) for i in range(5)]),
-        _batch("channel-b", "https://b.example/feed", [(f"b{i}", now - timedelta(hours=1, minutes=i)) for i in range(5)]),
+        _batch("channel-a", "https://a.example/feed", [(f"a{i}", now - timedelta(hours=1, minutes=i)) for i in range(20)]),
+        _batch("channel-b", "https://b.example/feed", [(f"b{i}", now - timedelta(hours=1, minutes=i)) for i in range(20)]),
     ])
-    manifest = build_site_from_storage(seeded, tmp_path / "site", per_channel_limit=5, now=now)
-    assert manifest["total_items"] == 10
+    manifest = build_site_from_storage(seeded, tmp_path / "site", per_channel_limit=20, now=now)
+    assert manifest["total_items"] == 40
     page = (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
-    latest = page.split("<h2>Latest</h2><ol>")[1].split("</ol>")[0]
+    latest = page.split("<ol>")[1].split("</ol>")[0]
     order = [line for line in latest.split("<li>")[1:] if line.strip()]
-    assert [line[0] for line in zip(order)] .count("") == 0  # placeholder guard
+    assert page.count("<ol>") == 1
+    assert "<h2>" not in page
+    assert len(order) == manifest["total_items"]
+    assert page.count('href="https://a.example/feed/0"') == 1
+    assert page.count('href="https://b.example/feed/19"') == 1
     first_five = [entry.split("</a>")[0] for entry in order[:5]]
     assert sum(name.startswith("<a href=\"https://a.example") for name in first_five) >= 2
     assert sum(name.startswith("<a href=\"https://b.example") for name in first_five) >= 2
