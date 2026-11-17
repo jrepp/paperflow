@@ -60,7 +60,12 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
     app.include_router(reader_router(ReaderService(storage, settings.topics)))
     from paperflow_topics import TopicService
     from paperflow_topic_api import topic_router
-    app.include_router(topic_router(TopicService(storage, settings.topics)))
+    topic_curator = None
+    if settings.assistant.enabled and settings.monitor.enabled:
+        from paperflow_assistant.topics import AssistantTopicCurator
+        from paperflow_assistant.store import AssistantStore
+        topic_curator = AssistantTopicCurator(AssistantStore(settings.assistant.path))
+    app.include_router(topic_router(TopicService(storage, settings.topics, topic_curator)))
 
     @app.exception_handler(NotFoundError)
     async def not_found(request, exc):
@@ -145,6 +150,26 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
         if not settings.monitor.enabled:
             raise HTTPException(503, "Monitor is disabled in this API process")
         return monitor.store.runs(limit)
+
+    @app.get("/api/monitor/curation")
+    def curation_metrics():
+        if not monitor.assistant:
+            return {"enabled": False}
+        return {"enabled": True, **monitor.assistant.store.metrics()}
+
+    @app.get("/api/monitor/curation/runs")
+    def curation_runs(limit: int = Query(default=20, ge=1, le=100)):
+        if not monitor.assistant:
+            return []
+        # Output and private memory never enter the public monitor projection.
+        return monitor.assistant.store.runs(limit)
+
+    @app.get("/api/reader/items/{item_id}/analysis")
+    def item_analysis(item_id: UUID):
+        result = monitor.assistant.store.analysis(item_id) if monitor.assistant else None
+        if result is None:
+            raise HTTPException(404, 'No completed analysis')
+        return result
 
     @app.get("/api/monitor/runs/{run_id}", response_model=MonitorRun)
     def run(run_id: UUID):

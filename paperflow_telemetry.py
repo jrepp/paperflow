@@ -31,6 +31,8 @@ class Telemetry:
         self.topic_runs = meter.create_counter("paperflow.topics.runs", unit="{run}")
         self.topic_duration = meter.create_histogram("paperflow.topics.duration", unit="s")
         self.topic_candidates = meter.create_counter("paperflow.topics.candidates", unit="{item}")
+        self.curation_runs = meter.create_counter("paperflow.curation.runs", unit="{run}")
+        self.curation_duration = meter.create_histogram("paperflow.curation.duration", unit="s")
         self.runs = meter.create_counter("paperflow.ingestion.runs", unit="{run}")
         self.duration = meter.create_histogram("paperflow.ingestion.duration", unit="s")
         self.items = meter.create_counter("paperflow.ingestion.items", unit="{item}")

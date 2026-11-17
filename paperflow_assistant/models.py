@@ -1,0 +1,107 @@
+"""Typed contracts for model work, evidence, memory, and evaluation."""
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pathlib import Path
+
+
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class AssistantSettings(StrictModel):
+    enabled: bool = False
+    path: Path = Path("artifacts/curation.db")
+    reasoning_model: str = "deepseek-flash"
+    reasoning_base_url: str = "https://api.deepseek.com"
+    reasoning_key: SecretStr | None = Field(default=None, exclude=True)
+    decision_model: str = "jev-1.14.0"
+    decision_base_url: str = "https://api.typesafe.ai"
+    decision_key: SecretStr | None = Field(default=None, exclude=True)
+    interval_seconds: int = Field(default=60, ge=1)
+    timeout_seconds: int = Field(default=240, ge=1, le=1800)
+    request_limit: int = Field(default=12, ge=1, le=100)
+    tool_limit: int = Field(default=40, ge=1, le=200)
+    token_limit: int = Field(default=60000, ge=1000, le=500000)
+    decision_limit: int = Field(default=12, ge=1, le=100)
+    decision_depth: int = Field(default=3, ge=1, le=10)
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    daily_attempt_limit: int = Field(default=100, ge=1, le=10000)
+    retry_seconds: int = Field(default=120, ge=1)
+    evaluation_sample_rate: float = Field(default=0.2, ge=0, le=1)
+    source_character_limit: int = Field(default=60000, ge=1000, le=200000)
+    categories: list[str] = Field(default_factory=lambda: [
+        "artificial-intelligence", "computing", "science", "engineering", "society", "other",
+    ], min_length=1, max_length=50)
+
+
+class Citation(StrictModel):
+    revision_id: UUID
+    quote: str = Field(min_length=1, max_length=2000)
+    start: int = Field(ge=0)
+
+
+class Finding(StrictModel):
+    statement: str = Field(min_length=1, max_length=3000)
+    kind: Literal["reported_result", "author_claim", "inference", "counterfactual"]
+    citations: list[Citation] = Field(min_length=1, max_length=12)
+    uncertainty: str = Field(min_length=1, max_length=2000)
+
+
+class Effect(StrictModel):
+    order: Literal[2, 3]
+    hypothesis: str = Field(min_length=1, max_length=2000)
+    mechanism: list[str] = Field(min_length=2, max_length=6)
+    assumptions: list[str] = Field(min_length=1, max_length=8)
+    time_horizon: str = Field(min_length=1, max_length=300)
+    falsifier: str = Field(min_length=1, max_length=1000)
+    uncertainty: str = Field(min_length=1, max_length=1000)
+    citations: list[Citation] = Field(min_length=1, max_length=12)
+
+
+class Analysis(StrictModel):
+    summary: str = Field(min_length=1, max_length=4000)
+    category: str
+    evidence_basis: Literal["full_text", "abstract", "excerpt"]
+    findings: list[Finding] = Field(min_length=1, max_length=20)
+    limitations: list[str] = Field(min_length=1, max_length=12)
+    biases: list[Finding] = Field(max_length=12)
+    effects: list[Effect] = Field(max_length=10)
+    research_gaps: list[str] = Field(max_length=12)
+
+
+class MemoryInput(StrictModel):
+    kind: Literal["follow_up", "insight"]
+    text: str = Field(min_length=1, max_length=4000)
+    scope: str = Field(min_length=1, max_length=1000)
+    basis: Literal["observation", "hypothesis", "task"]
+    citations: list[Citation] = Field(max_length=12)
+    uncertainty: str = Field(min_length=1, max_length=1000)
+    counterevidence: str = Field(max_length=2000)
+    revisit_when: str = Field(min_length=1, max_length=1000)
+    priority: Literal["low", "normal", "high"] = "normal"
+
+
+class DecisionRequest(StrictModel):
+    question: str = Field(min_length=1, max_length=2000)
+    criteria: str = Field(min_length=1, max_length=3000)
+    citations: list[Citation] = Field(min_length=1, max_length=12)
+    parent_ids: list[str] = Field(default_factory=list, max_length=12)
+
+
+class Judgment(StrictModel):
+    """Answer the supplied question using its criteria and the cited evidence."""
+    supported: bool = Field(description="The evidence satisfies the supplied question's criteria.")
+    evidence_sufficient: bool = Field(description="The evidence is sufficient to make this judgment.")
+
+
+class QualityJudgment(StrictModel):
+    """Audit the supplied analysis against source text, independently of the curator."""
+    factual_support: bool = Field(description="Factual claims and summary agree with the cited source text.")
+    evidence_limits: bool = Field(description="The analysis preserves the limits of excerpt, abstract, or full-text evidence.")
+    uncertainty: bool = Field(description="The analysis distinguishes findings, claims, inferences, and counterfactuals.")
+    causal_reasoning: bool = Field(description="Effects have defensible causal steps and assumptions, or missing effects have explicit evidence gaps.")
+    neutrality: bool = Field(description="The prose is direct and neutral, with no editorializing or rhetorical questions.")
+    coverage: bool = Field(description="The analysis captures the source's important ideas without material omissions.")
+    category_fit: bool = Field(description="The category matches the content and the supplied taxonomy.")

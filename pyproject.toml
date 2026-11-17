@@ -22,6 +22,7 @@ dependencies = [
   "textual>=8.2.3",
   "typer>=0.24.1",
   "websockets>=16.0",
+  "pydantic-ai-slim[openai,typesafe]>=2.69.0",
 ]
 
 [project.optional-dependencies]
@@ -38,7 +39,7 @@ arxiv-radar = "arxiv_radar_cli:main"
 boox-sync = "boox_sync_cli:main"
 
 [tool.setuptools]
-packages = ["paperflow_reader"]
+packages = ["paperflow_reader", "paperflow_assistant"]
 py-modules = [
   "arxiv_radar_cli",
   "boox_sync_cli",
@@ -98,3 +99,4 @@ select = ["E9", "F63", "F7", "F82"]
 
 [tool.setuptools.package-data]
 paperflow_reader = ["static/*", "static/pdf-assets/**/*"]
+paperflow_assistant = ["prompt.txt"]

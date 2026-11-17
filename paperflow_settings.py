@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from paperflow_ingest_models import IngestionSettings
 from paperflow_topic_models import TopicSettings
+from paperflow_assistant.models import AssistantSettings
 
 
 class StorageSettings(BaseModel):
@@ -99,6 +100,7 @@ class ResearchSettings(BaseSettings):
     telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)
     topics: TopicSettings = Field(default_factory=TopicSettings)
     publishing: PublishingSettings = Field(default_factory=PublishingSettings)
+    assistant: AssistantSettings = Field(default_factory=AssistantSettings)
 
 
 def load_research_settings(

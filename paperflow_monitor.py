@@ -55,6 +55,12 @@ class IntegrationMonitor:
         self.last_topic_run = None
         self.last_tick = None
         self.last_error = None
+        self.assistant = None
+        self._assistant_pool = None
+        self._assistant_future = None
+        self._next_assistant_at = 0
+        self.assistant_error = None
+        self.last_assistant_run = None
 
     def start(self):
         path = self.settings.storage.path.resolve()
@@ -72,6 +78,11 @@ class IntegrationMonitor:
             if self.telemetry is None:
                 self.telemetry = Telemetry(self.settings.telemetry)
             if self.settings.monitor.enabled:
+                if self.settings.assistant.enabled:
+                    from paperflow_assistant.runtime import AssistantWorker
+                    self.assistant = AssistantWorker(self.settings)
+                    self.assistant.initialize()
+                    self._assistant_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="paperflow-curator")
                 self._pool = ThreadPoolExecutor(max_workers=self.settings.monitor.workers, thread_name_prefix="paperflow-ingest")
                 self._thread = threading.Thread(target=self._loop, name="paperflow-monitor", daemon=True)
                 self._thread.start()
@@ -85,6 +96,8 @@ class IntegrationMonitor:
             self._thread.join()
         if self._pool:
             self._pool.shutdown(wait=True)
+        if self._assistant_pool:
+            self._assistant_pool.shutdown(wait=True)
         if self._owns_telemetry and self.telemetry:
             self.telemetry.shutdown()
         if self._lock:
@@ -102,17 +115,33 @@ class IntegrationMonitor:
                    time.time() - run.started_at.timestamp() > self.settings.monitor.run_timeout_seconds]
         tick_recent = self.last_tick is not None and time.time() - self.last_tick < max(
             5, self.settings.monitor.poll_seconds * 3 + self.settings.storage.busy_timeout_seconds)
-        healthy = self.accepting and tick_recent and not self.last_error and not self.topic_error and not overdue
+        healthy = self.accepting and tick_recent and not self.last_error and not self.topic_error and not self.assistant_error and not overdue
         return {"healthy": healthy, "enabled": self.settings.monitor.enabled,
                 "scheduler_running": self.accepting, "schedule_enabled": self.settings.monitor.schedule_enabled,
                 "telemetry": {"otlp_configured": bool(self.settings.telemetry.otlp_endpoint)}, "last_tick": self.last_tick,
                 "scheduler_error": self.last_error, "overdue_runs": overdue,
+                "curation": {"enabled": self.settings.assistant.enabled,
+                             "running": bool(self._assistant_future and not self._assistant_future.done()),
+                             "last_run": self.last_assistant_run, "error": self.assistant_error},
                 "topics": {"enabled": self.settings.topics.enabled, "running": bool(self._topic_future and not self._topic_future.done()),
                            "last_run_id": self.last_topic_run, "error": self.topic_error}}
 
     def _loop(self):
         while not self._stop.is_set():
             try:
+                if self._assistant_future and self._assistant_future.done():
+                    try:
+                        result = self._assistant_future.result()
+                        if result:
+                            self.last_assistant_run = result['id']
+                            self.assistant_error = result.get('error')
+                    except Exception as exc:
+                        self.assistant_error = type(exc).__name__
+                    self._assistant_future = None
+                if (self.assistant and self.settings.monitor.schedule_enabled and self._assistant_future is None
+                    and time.time() >= self._next_assistant_at):
+                    self._assistant_future = self._assistant_pool.submit(self._run_assistant)
+                    self._next_assistant_at = time.time() + self.settings.assistant.interval_seconds
                 if self._topic_future and self._topic_future.done():
                     try:
                         self.last_topic_run=str(self._topic_future.result().id)
@@ -153,11 +182,26 @@ class IntegrationMonitor:
                 logger.error(json.dumps({"event": "scheduler_error", "error_type": type(exc).__name__}))
             self._stop.wait(self.settings.monitor.poll_seconds)
 
+    def _run_assistant(self):
+        started = time.monotonic()
+        with self.telemetry.tracer.start_as_current_span('curation.run', record_exception=False) as span:
+            result = self.assistant.tick()
+            if result:
+                span.set_attribute('curation.run_id', result['id'])
+                span.set_attribute('curation.status', result['status'])
+                self.telemetry.curation_runs.add(1, {'status': result['status']})
+                self.telemetry.curation_duration.record(time.monotonic()-started)
+            return result
+
     def _run_topics(self):
         from paperflow_storage_sqlite import SQLiteResearchStorage
         from paperflow_topics import TopicService
         from uuid import uuid5, NAMESPACE_URL
-        service=TopicService(SQLiteResearchStorage(self.settings.storage),self.settings.topics)
+        curator = None
+        if self.assistant:
+            from paperflow_assistant.topics import AssistantTopicCurator
+            curator = AssistantTopicCurator(self.assistant.store)
+        service=TopicService(SQLiteResearchStorage(self.settings.storage),self.settings.topics,curator)
         interval=self.settings.topics.interval_seconds
         slot=int(time.time()//interval)*interval
         at=datetime.fromtimestamp(slot,UTC)

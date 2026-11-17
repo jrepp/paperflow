@@ -132,9 +132,9 @@ async function reader(id, generation) {
   const {item,state,revision,latest_revision_id,observation,pdf} = await api(`/api/reader/items/${id}?latest=${latestRequested}`);
   if(generation!==pageGeneration) return;
   const from=history.state?.from && !history.state.from.startsWith('/read/') ? history.state.from : '/';
-  activeReader={id,state,revision,discussion:discussion || view==='pdf' || view==='diagrams',from};
+  activeReader={id,state,revision,discussion:discussion || view==='analysis' || view==='pdf' || view==='diagrams',from};
   document.title=`${item.title} · Paperflow`;
-  main.innerHTML=`<a class="control" id="back-feed" href="${esc(from)}">← Back to reading list</a><div class="reader-top"><p class="kicker"><span class="item-type" data-type="${esc(item.kind)}">${typeLabel(item.kind)}</span> ${esc(observation?.channel || 'Local library')}</p><h1>${esc(item.title)}</h1><p class="meta">${esc(age(observation?.observed_at))}</p><div class="flex flex-wrap gap-2"><button id="save-reader" aria-pressed="${state.saved}">${state.saved?'Saved':'Save for later'}</button><button id="finish-reader">${state.status==='finished'?'Mark unread':'Mark finished'}</button>${external(observation?.entry.url || item.canonical_url,item.kind==='paper'?'Open original paper':'Open original')}</div><nav class="reader-tabs flex flex-wrap gap-2" aria-label="Item views"><a href="/read/${id}" ${view==='markdown'?'aria-current="page"':''}>Markdown</a><a href="/read/${id}?view=pdf" ${view==='pdf'?'aria-current="page"':''}>PDF</a><a href="/read/${id}?view=diagrams" ${view==='diagrams'?'aria-current="page"':''}>Diagrams</a><a href="/read/${id}?view=discussion" ${discussion?'aria-current="page"':''}>Discussion</a></nav><div id="availability" class="panel"></div></div><section id="reading-content" aria-label="${discussion?'Discussion samples':'Source text'}"></section>`;
+  main.innerHTML=`<a class="control" id="back-feed" href="${esc(from)}">← Back to reading list</a><div class="reader-top"><p class="kicker"><span class="item-type" data-type="${esc(item.kind)}">${typeLabel(item.kind)}</span> ${esc(observation?.channel || 'Local library')}</p><h1>${esc(item.title)}</h1><p class="meta">${esc(age(observation?.observed_at))}</p><div class="flex flex-wrap gap-2"><button id="save-reader" aria-pressed="${state.saved}">${state.saved?'Saved':'Save for later'}</button><button id="finish-reader">${state.status==='finished'?'Mark unread':'Mark finished'}</button>${external(observation?.entry.url || item.canonical_url,item.kind==='paper'?'Open original paper':'Open original')}</div><nav class="reader-tabs flex flex-wrap gap-2" aria-label="Item views"><a href="/read/${id}?view=analysis" ${view==='analysis'?'aria-current="page"':''}>Analysis</a><a href="/read/${id}" ${view==='markdown'?'aria-current="page"':''}>Markdown</a><a href="/read/${id}?view=pdf" ${view==='pdf'?'aria-current="page"':''}>PDF</a><a href="/read/${id}?view=diagrams" ${view==='diagrams'?'aria-current="page"':''}>Diagrams</a><a href="/read/${id}?view=discussion" ${discussion?'aria-current="page"':''}>Discussion</a></nav><div id="availability" class="panel"></div></div><section id="reading-content" aria-label="${discussion?'Discussion samples':'Source text'}"></section>`;
   const back=document.querySelector('#back-feed');
   back.onclick=async e=>{if(history.state?.readerDepth > 0 && history.state?.from && !history.state.from.startsWith('/read/')) { e.preventDefault(); e.stopPropagation(); await savePosition(); history.go(-(history.state.readerDepth || 1)); }};
   document.querySelector('#save-reader').onclick=async e=>{
@@ -148,7 +148,19 @@ async function reader(id, generation) {
     catch(error){announce(error.message);}finally{button.disabled=false;}
   };
   const availability=document.querySelector('#availability'), content=document.querySelector('#reading-content');
-  if(view==='pdf') {
+  if(view==='analysis') {
+    content.setAttribute('aria-label','Research analysis');
+    availability.textContent='Model analysis with cited evidence. Inferences and downstream effects require independent review.';
+    try{
+      const result=await api(`/api/reader/items/${id}/analysis`);
+      if(generation!==pageGeneration)return;
+      const a=result.analysis;
+      const refs=values=>values.map(c=>`<blockquote><p>${esc(c.quote)}</p><footer>Revision ${esc(c.revision_id)} · character ${c.start}</footer></blockquote>`).join('');
+      const findings=values=>values.map(f=>`<article><p><strong>${esc(f.kind.replaceAll('_',' '))}</strong>: ${esc(f.statement)}</p><p>${esc(f.uncertainty)}</p><details><summary>Source evidence</summary>${refs(f.citations)}</details></article>`).join('');
+      content.className='prose';
+      content.innerHTML=`<p class="meta">${esc(a.category)} · Evidence: ${esc(a.evidence_basis)} · Source revision ${esc(result.revision_id)}</p><h2>Summary</h2><p>${esc(a.summary)}</p><h2>Findings</h2>${findings(a.findings)}<h2>Limits</h2><ul>${a.limitations.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>${a.biases.length?`<h2>Bias assessments</h2>${findings(a.biases)}`:''}${a.effects.length?`<h2>Conditional effects</h2>${a.effects.map(e=>`<article><h3>Order ${e.order}: ${esc(e.hypothesis)}</h3><ol>${e.mechanism.map(x=>`<li>${esc(x)}</li>`).join('')}</ol><p>Assumptions: ${esc(e.assumptions.join(' '))}</p><p>Time horizon: ${esc(e.time_horizon)}</p><p>Falsifier: ${esc(e.falsifier)}</p><p>${esc(e.uncertainty)}</p><details><summary>Source evidence</summary>${refs(e.citations)}</details></article>`).join('')}`:''}<h2>Research gaps</h2><ul>${a.research_gaps.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`;
+    }catch(error){if(generation===pageGeneration)content.textContent='No analysis is available for this item.';}
+  } else if(view==='pdf') {
     content.setAttribute('aria-label','PDF viewer');
     if(pdf){
       availability.innerHTML=`<p>Local PDF · ${pdf.page_count} pages. PDF page position is separate from Markdown reading progress.</p><a class="control" href="/api/reader/items/${id}/pdf" target="_blank" rel="noopener">Open PDF file ↗</a>`;
@@ -205,7 +217,7 @@ async function research(generation) {
   for(const bucket of data.records) {const el=document.createElement('article');el.className='panel';el.innerHTML=`<h2>${esc(bucket.title)}</h2><p>${esc(bucket.research_question)}</p><a class="control" href="/research/${bucket.id}">Read research brief</a>`;container.append(el);}
 }
 async function sources(generation) {
-  main.innerHTML=`<div class="sources-heading"><div><p class="kicker">Ingestion monitor</p><h1>Sources</h1><p class="muted">From incoming feeds to your reading space.</p></div><div class="sources-refresh"><button id="refresh-sources">Refresh source status</button><span id="sources-updated" class="meta">Checking…</span></div></div><div id="sources-alert" aria-live="polite"></div><section id="monitor-overview" aria-label="Ingestion overview"></section><div class="sources-section-heading"><h2>Source feeds</h2><span class="meta">Freshness reflects collection, not publication date.</span></div><div id="source-list" class="source-monitor-grid"></div><details id="recent-runs" class="run-history"><summary>Recent ingestion runs</summary><div id="run-history"></div></details>`;
+  main.innerHTML=`<div class="sources-heading"><div><p class="kicker">Ingestion monitor</p><h1>Sources</h1><p class="muted">From incoming feeds to your reading space.</p></div><div class="sources-refresh"><button id="refresh-sources">Refresh source status</button><span id="sources-updated" class="meta">Checking…</span></div></div><div id="sources-alert" aria-live="polite"></div><section id="monitor-overview" aria-label="Ingestion overview"></section><section id="curation-overview" class="panel" aria-label="Research curation"></section><div class="sources-section-heading"><h2>Source feeds</h2><span class="meta">Freshness reflects collection, not publication date.</span></div><div id="source-list" class="source-monitor-grid"></div><details id="recent-runs" class="run-history"><summary>Recent ingestion runs</summary><div id="run-history"></div></details>`;
   let loading=false,operating=false;
   const sourceName=name=>({'hackernews':'Hacker News','huggingface-papers':'Hugging Face Papers','lemmy-technology':'Lemmy · Technology','tildes-computing':'Tildes · Computing','mbin':'Mbin'}[name] || name);
   const stamp=value=>value?new Date(value).toLocaleString(): 'Not yet';
@@ -216,12 +228,24 @@ async function sources(generation) {
     if(loading || (operating&&!manual) || generation!==pageGeneration)return;
     loading=true;
     try{
-      const [observedResult,channelsResult,runsResult,healthResult]=await Promise.allSettled([
+      const [observedResult,channelsResult,runsResult,healthResult,curationResult]=await Promise.allSettled([
         api('/api/reader/channels'),api('/api/monitor/channels'),api('/api/monitor/runs?limit=10'),
-        fetch('/health/ready').then(async r=>{const value=await r.json();if(!r.ok&&!('healthy' in value))throw new Error('Monitor health unavailable');return value;})]);
+        fetch('/health/ready').then(async r=>{const value=await r.json();if(!r.ok&&!('healthy' in value))throw new Error('Monitor health unavailable');return value;}),api('/api/monitor/curation')]);
       if(generation!==pageGeneration)return;
       if(observedResult.status==='rejected')throw observedResult.reason;
       const observed=observedResult.value,channels=channelsResult.status==='fulfilled'?channelsResult.value:[],runs=runsResult.status==='fulfilled'?runsResult.value:[],health=healthResult.status==='fulfilled'?healthResult.value:null;
+      const curation=curationResult.status==='fulfilled'?curationResult.value:null;
+      const curator=document.querySelector('#curation-overview');
+      if(!curation){curator.innerHTML='<h2>Research curation</h2><p>Status unavailable.</p>';}
+      else if(!curation.enabled){curator.innerHTML='<h2>Research curation</h2><p>Model curation is disabled.</p>';}
+      else{
+        const counts=curation.counts||{},quality=curation.quality||{};
+        const groups=Object.entries(quality.groups||{}).map(([name,g])=>{
+          const bounds=g.pass_rate_interval_95;
+          return `<li>${esc(name)}: ${g.passed} / ${g.n} passed (${Math.round(g.pass_rate*100)}%). Estimated interval: ${Math.round(bounds[0]*100)}–${Math.round(bounds[1]*100)}%.</li>`;
+        }).join('');
+        curator.innerHTML=`<h2>Research curation</h2><dl class="monitor-metrics"><div><dt>Completed / eligible</dt><dd>${counts.succeeded||0} / ${curation.eligible_jobs||0}</dd></div><div><dt>Queued / running</dt><dd>${counts.queued||0} / ${counts.running||0}</dd></div><div><dt>Failed / retries</dt><dd>${counts.failed||0} / ${curation.retries||0}</dd></div><div><dt>Open follow-ups</dt><dd>${curation.active_memory?.follow_up||0}</dd></div></dl><p>Counts refer to source revisions and harness configurations.</p><p>${curation.valid_quote_citations||0} exact citation matches. Matches establish provenance, not factual correctness.</p><p>Quality sample: ${quality.sample_evaluated||0} evaluated / ${quality.sample_selected||0} selected. Evaluation errors: ${quality.evaluation_errors||0}.</p>${groups?`<ul>${groups}</ul>`:'<p>Quality estimate unavailable: no completed evaluations.</p>'}<p class="muted">Model-estimated quality. Human-calibrated accuracy is unknown.</p>`;
+      }
       const mode=health?.enabled===false?'Monitor disabled':health?.schedule_enabled===false?'Manual collection':health?.healthy?'Automatic collection':'Monitor needs attention';
       const running=channels.filter(c=>c.active_run_id).length,paused=channels.filter(c=>c.paused).length;
       const attention=channels.filter(c=>['Stale','Failed','Warnings','Not run yet'].includes(statusOf(c))).length;
