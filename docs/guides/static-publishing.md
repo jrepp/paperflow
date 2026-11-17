@@ -75,7 +75,8 @@ running a separate scheduled exporter into the service-managed releases tree.
 
 ## Expandable curation cards
 
-Published links retain their compact default view. Open **Curation & details**
+Published links show the model summary and evidence basis directly on each card.
+Open **Curation & details**
 with a click or keyboard to inspect source metadata, observed score and comment
 counts, discussion links, and model curation when available. Missing counts remain
 absent; zero counts are displayed. Source excerpts are labeled separately from

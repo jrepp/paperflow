@@ -10,10 +10,12 @@ test('published links expand and open the complete curation Markdown', async ({ 
   await page.goto(pathToFileURL(`${directory}/site/index.html`).href);
   const card = page.locator('.curation-card');
   await expect(card.locator('.curation-body')).toBeHidden();
+  await expect(page.locator('.model-summary')).toBeVisible();
+  await expect(page.locator('.model-summary')).toContainText('A model summary');
   await card.locator('summary').focus();
   await page.keyboard.press('Enter');
   await expect(card.locator('.curation-body')).toBeVisible();
-  await expect(card).toContainText('A model summary');
+  await expect(card).toContainText('Findings');
   await expect(card.getByRole('link', { name: 'Discussion' })).toHaveAttribute('href', 'https://example.com/discussion');
   await card.getByRole('link', { name: 'Read curation Markdown' }).click();
   const document = page.getByRole('region', { name: 'Curation Markdown' });
