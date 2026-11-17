@@ -17,6 +17,8 @@ from the repository root. See the development guide for hooks, CI and release se
 
 ## Designs
 
+- [Research curation harness and assistant prompt](designs/research-curation-harness.md)
+
 - [Editorial topics above ingestion sources](designs/editorial-topics.md)
 
 - [Composable source integrations](designs/composable-ingestion.md)
