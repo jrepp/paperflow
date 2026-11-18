@@ -11,6 +11,11 @@ test('published links expand and open the complete curation Markdown', async ({ 
     "import runpy,sys; from pathlib import Path; runpy.run_path('tests/test_publish_site.py')['_curated_site'](Path(sys.argv[1]))", directory]);
   await page.goto(pathToFileURL(`${directory}/site/index.html`).href);
   const card = page.locator('.curation-card');
+  const article = page.locator('article[id^="item-"]').first();
+  await expect(card.locator(':scope > summary')).toContainText('1 source');
+  await expect(card.locator(':scope > summary')).not.toContainText('A paper');
+  expect(await article.locator('h2').evaluate((el) => el.getBoundingClientRect().top))
+    .toBeLessThan(await article.locator('.item-meta').evaluate((el) => el.getBoundingClientRect().top));
   await expect(card.locator('.curation-body')).toBeHidden();
   await expect(page.locator('.model-summary')).toBeVisible();
   await expect(page.locator('.model-summary')).toContainText('A model summary');
@@ -100,7 +105,7 @@ test('anonymous rating is retryable, deduplicates concurrent clicks, and support
     await expect(page.getByText('Ratings use a private browser identifier')).toBeVisible();
     const story = page.locator('article[id^="story-"]');
     const summary = story.locator('.curation-card > summary');
-    await expect(summary).toContainText('Finding');
+    await expect(summary).toHaveAttribute('aria-label', 'Details 2 sources for Finding');
     await expect(summary).toContainText('2 sources');
     expect(await summary.evaluate(el => getComputedStyle(el, '::before').transitionDuration)).toBe('0s');
     await summary.focus();
