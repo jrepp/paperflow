@@ -203,7 +203,10 @@ against overhead, and compare quality estimates before reducing that coverage.
 
 The worker prioritizes papers within the recent items selected for static
 publication, followed by other sources. The decision model assesses source
-contributions before the reasoning model writes a substantive account. Before model work, it attempts bounded public content retrieval for
+contributions and selects an allowed topic category before the reasoning model
+writes a substantive account. The topic curator uses the latest revision's
+decision-model category when available and falls back to completed analysis for
+older work. Uncertain categories can remain unassigned. Before model work, it attempts bounded public content retrieval for
 one visible item per cycle, including items without a feed excerpt. Article/main
 HTML is extracted without navigation or scripts; arXiv links prefer paper HTML
 and fall back to PDF when unavailable. PDF extraction is limited to 100 pages.
