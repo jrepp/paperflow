@@ -550,13 +550,12 @@ def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None =
         '<a class="skip" href="#main">Skip to content</a>',
         '<header class="masthead"><div class="shell topbar">'
         '<a href="./" class="brand" aria-label="Paperflow home">Paperflow '
-        '</a></div></header>',
-        '<main id="main" class="shell py-8" tabindex="-1">',
-        '<div class="feed-toolbar"><h1>Latest</h1></div>',
+        '</a></div><div class="shell">',
         '<p class="muted published-intro">Recent reading from all sources. <strong>AI curation</strong> · Ratings are pseudonymous.</p>',
         '<details class="rating-privacy"><summary>How ratings work</summary>'
         '<p>Ratings use a private browser identifier to count repeat votes once. The service hashes your IP address '
-        'and browser request headers and stores the rating identifier without the raw inputs.</p></details>',
+        'and browser request headers and stores the rating identifier without the raw inputs.</p></details></div></header>',
+        '<main id="main" class="shell py-8" tabindex="-1">',
         '<div class="sr-status" id="rating-announcement" role="status" aria-live="polite"></div>',
     ]
     if latest or stories:
