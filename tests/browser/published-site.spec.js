@@ -179,6 +179,8 @@ test('curated item sends its exact run version and uncurated cards have no vote 
     const card = page.locator('.curation-card');
     await card.locator(':scope > summary').click();
     const group = card.locator('.card-rating');
+    await expect(card.locator('.curation-body > :first-child')).toHaveClass('card-actions');
+    await expect(group.getByRole('button', {name: 'Helpful'})).toBeVisible();
     const version = await group.getAttribute('data-version');
     await group.getByRole('button', {name: 'Helpful'}).click();
     await expect(card).not.toHaveAttribute('open', '');
