@@ -76,6 +76,7 @@ test('safe source text, dismissed items and service errors stay recoverable',asy
   await expect(row.locator('h2')).toBeHidden();
   await expect(row.locator('.clear-receipt')).toContainText('Cleared');
   await row.getByRole('button',{name:/Undo — restore/}).click();
+  await expect(row.getByRole('button',{name:/All set — clear/})).toBeVisible();
   await page.reload(); await expect(row).toBeVisible();
   await page.route('**/api/reader/feed?**',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({detail:'Reader temporarily unavailable'})}));
   await page.goto('/');await expect(page.getByRole('alert')).toContainText('Reader temporarily unavailable');
