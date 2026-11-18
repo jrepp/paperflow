@@ -212,6 +212,15 @@ remain unassigned. Before model work, it attempts bounded public content retriev
 one visible item per cycle, including items without a feed excerpt. Article/main
 HTML is extracted without navigation or scripts; arXiv links prefer paper HTML
 and fall back to PDF when unavailable. PDF extraction is limited to 100 pages.
+
+For sources over 30,000 characters, the decision model selects up to five exact
+6,000-character blocks (including the beginning) for the first reasoning turn.
+The reasoning model can request other passages and is told that coverage is
+incomplete. Citations are still verified against the original revision. Invalid or
+failed selection falls back to the usual source window. Set
+`research.assistant.evidence_selection_enabled` to false to disable this step.
+Selection and reasoning usage are metered separately; compare actual costs and
+quality before assuming a saving. Cached reasoning input can be inexpensive.
 Retrieved content is stored as an immutable revision, so model citations refer
 to the text actually read. Generic article HTML remains labeled excerpt because
 markup alone cannot establish complete access. Missing or inaccessible content
