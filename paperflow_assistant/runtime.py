@@ -571,7 +571,8 @@ class AssistantWorker:
                 missing_evidence=f.missing_evidence) for f in decision.findings)
             assessment = StoryAssessment(revision_id=context.revision.id,
                 story_id=decision.story_id, story_version=selected['story']['version'] if selected else None,
-                outcome=decision.outcome, findings=findings, evidence_basis=context.revision.evidence_basis,
+                outcome=decision.outcome, category=decision.category if decision.category in self.settings.categories else None,
+                findings=findings, evidence_basis=context.revision.evidence_basis,
                 creator=self.settings.decision_model, creator_kind='processor',
                 processor_version=fingerprint(self.settings), rule_set_version=RULE_VERSION,
                 processing_run_id=uuid5(NAMESPACE_URL, job['id']))
@@ -598,7 +599,7 @@ class AssistantWorker:
                             source_assessment_ids=[x.assessment_id for x in repo.story_sources(story.id)])
                     already_published = bool(story.account) or len(pending) == 1 and pending[0].id == assessment.id
         self.store.finish_story_job(job, assessment, usage_snapshot(context.usage), time.monotonic()-start,
-                                    already_published=already_published)
+                                    already_published=already_published, category=assessment.category)
         return {'id': job['id'], 'status': 'succeeded', 'stage': 'assessment',
                 'outcome': assessment.outcome, 'attempt': job['attempts']}
 

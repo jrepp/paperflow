@@ -29,6 +29,7 @@ class StoryAssessment(AuthoredRecord):
     story_id: UUID | None = None
     story_version: int | None = Field(default=None, ge=1)
     outcome: Literal['new_story', 'repeated_coverage', 'material_contribution', 'unresolved']
+    category: str | None = Field(default=None, max_length=100)
     findings: tuple[StoryFinding, ...] = ()
     evidence_basis: Literal['full_text', 'abstract', 'excerpt']
     rule_set_version: Text
