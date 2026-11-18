@@ -215,6 +215,15 @@ Historical search returns at most three passages per call, and the task asks for
 one targeted search and decision check before finishing. Longer sources require
 explicit coverage limits and targeted additional reads. The per-response output
 allowance is 32,000 tokens; the cumulative 200,000-token cap is unchanged.
+The harness resolves an incorrect citation offset only when its exact quotation
+occurs once in the specified immutable revision. Whitespace-only differences from
+extraction line wrapping can be resolved to the actual source substring. Words,
+punctuation, numbers, and negation are never changed. Missing quotes, unknown revisions,
+and ambiguous quotes with incorrect offsets still fail validation. Public-content
+runs expose only source reading, historical search, and decision tools. Existing
+memory is supplied as context; optional memory writes and collection changes do
+not consume this public-analysis budget. Other revision workflows retain the full
+tool set.
 
 Semantic search and a cross-record index of claims and summaries remain future work.
 

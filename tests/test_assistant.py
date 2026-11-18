@@ -481,7 +481,8 @@ def test_large_source_window_and_budget_are_supplied_to_model(tmp_path):
     settings, storage, item, rev, output = fixture(tmp_path)
     settings.assistant.evaluation_sample_rate = 0
     rev = CurationService(storage).add(ContentRevision.from_markdown(
-        item_id=item.id, markdown=rev.markdown + '\n' + 'Measured results. ' * 6000))
+        item_id=item.id, processor_version='public-content-v1',
+        markdown=rev.markdown + '\n' + 'Measured results. ' * 6000))
     output['evidence_basis'] = 'full_text'
     output['findings'][0]['citations'][0]['revision_id'] = str(rev.id)
     worker = AssistantWorker(settings)
@@ -497,6 +498,7 @@ def test_large_source_window_and_budget_are_supplied_to_model(tmp_path):
         assert prompt['source_truncated'] is False
         assert prompt['budget']['total_tokens'] == 200000
         assert info.model_settings['max_tokens'] == 32000
+        assert {tool.name for tool in info.function_tools} == {'search_history', 'read_revision', 'evaluate_decisions'}
         return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, output)])
     result = asyncio.run(run_agent(context, item.model_dump(mode='json'), FunctionModel(respond), TestModel()))
     assert result[0]['summary'] == output['summary']
@@ -512,3 +514,39 @@ def test_worker_claims_only_current_harness_configuration(tmp_path):
     job = worker.store.claim(3, fingerprint=current)
     assert job['fingerprint'] == current
     assert worker.store.claim(3, fingerprint=current) is None
+
+
+def test_citation_offsets_are_resolved_only_for_unique_exact_quotes(tmp_path):
+    from paperflow_assistant.models import Citation
+    from paperflow_assistant.quality import validate_citations
+    settings, storage, item, rev, output = fixture(tmp_path)
+    rev = CurationService(storage).add(ContentRevision.from_markdown(
+        item_id=item.id, markdown='αβ introduction. Unique measured result. Repeated. Repeated.'))
+    quote = Citation(revision_id=rev.id, quote='Unique measured result.')
+    validate_citations([quote], storage)
+    assert quote.start == rev.markdown.index(quote.quote)
+    assert rev.markdown[quote.start:quote.start+len(quote.quote)] == quote.quote
+    for text in ('Invented measurement.', 'Repeated.'):
+        with pytest.raises(ValueError, match='Citation does not match'):
+            validate_citations([Citation(revision_id=rev.id, quote=text)], storage)
+    positioned = Citation(revision_id=rev.id, quote='Repeated.', start=rev.markdown.rindex('Repeated.'))
+    validate_citations([positioned], storage)
+    assert positioned.start == rev.markdown.rindex('Repeated.')
+    with pytest.raises(ValueError):
+        validate_citations([Citation(revision_id=uuid4(), quote='Unique measured result.')], storage)
+
+
+def test_wrapped_quotes_preserve_exact_source_and_reject_changed_words(tmp_path):
+    from paperflow_assistant.models import Citation
+    from paperflow_assistant.quality import validate_citations
+    settings, storage, item, rev, output = fixture(tmp_path)
+    rev = CurationService(storage).add(ContentRevision.from_markdown(item_id=item.id,
+        markdown='αβ. The study\n  did not improve\tlatency. A\nresult. A result.'))
+    citation = Citation(revision_id=rev.id, quote='The study did not improve latency.')
+    validate_citations([citation], storage)
+    assert citation.quote == 'The study\n  did not improve\tlatency.'
+    assert citation.start == 4
+    assert rev.markdown[citation.start:citation.start+len(citation.quote)] == citation.quote
+    for quote in ('The study did improve latency.', 'A  result.'):
+        with pytest.raises(ValueError):
+            validate_citations([Citation(revision_id=rev.id, quote=quote)], storage)

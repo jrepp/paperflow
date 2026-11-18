@@ -58,7 +58,7 @@ class AssistantSettings(StrictModel):
 class Citation(StrictModel):
     revision_id: UUID
     quote: str = Field(min_length=1, max_length=2000)
-    start: int = Field(ge=0)
+    start: int = Field(default=0, ge=0, description="Unicode offset if known; the harness resolves unique exact quotes when the offset does not match.")
 
 
 class Finding(StrictModel):
