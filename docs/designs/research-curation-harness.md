@@ -106,7 +106,10 @@ defaults to `artifacts/curation.db` and must differ from the research database.
 It stores the queue, source index, memory, analyses, decisions, and evaluation receipts.
 The monitor owns recovery and one dedicated curation worker. Ingestion uses its
 existing worker pool. The curation interval defaults to 60 seconds.
-Recent revisions take priority over the historical backlog. Each tick indexes at
+Revisions selected for the current publication take priority over historical work;
+assessment and curation alternate within each priority group. The public feed can
+still show source items before analysis completes: selection does not wait for the
+worker, and failures or the daily attempt limit can delay it. Each tick indexes at
 most 10,000 new source revisions before it claims a model job.
 
 The reasoning key comes from `DS4_API_KEY` or the secret setting

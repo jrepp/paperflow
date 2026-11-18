@@ -236,6 +236,7 @@ def test_missing_curation_does_not_mislabel_source_excerpt(tmp_path):
     build_site_from_storage(storage, out)
     page = (out / 'index.html').read_text()
     assert 'No model curation available yet.' in page
+    assert page.index('Model curation unavailable.') < page.index('<details class="curation-card">')
     assert 'Model analysis' not in page
     assert 'Read curation Markdown' not in page
 
