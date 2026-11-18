@@ -11,7 +11,7 @@ from scripts.acceptance import AcceptanceGate, coverage
 
 def test_manifest_matches_native_definitions_and_document():
     assert {row['criterion'] for row in coverage()} == {
-        f'AC-{number}' for number in range(1, 12)
+        f'AC-{number}' for number in range(1, 16)
     }
 
 

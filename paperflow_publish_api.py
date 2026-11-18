@@ -136,7 +136,7 @@ class BuildService:
             from paperflow_publish_site import _assistant_store
             assistant = _assistant_store(self.assistant_settings) if self.assistant_settings else None
             manifest = build_site_from_storage(self.storage, staging,
-                workspace_url=self.settings.workspace_url, assistant_store=assistant)
+                workspace_url=self.settings.workspace_url, assistant_store=assistant, releases_dir=self.settings.releases_dir)
             manifest['release_id'] = job.id.hex
             manifest['index_sha256'] = hashlib.sha256((staging / 'index.html').read_bytes()).hexdigest()
             _write_json(staging / 'build.json', manifest)

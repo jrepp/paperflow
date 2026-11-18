@@ -13,6 +13,7 @@ from paperflow_domain import (
     Annotation, BucketClaim, BucketMembership, Claim, ClaimReview, ContentRevision,
     EvidenceAssessment, EvidenceReview, Identifier, Item, Record, ResearchBucket, ItemRelationship, LifecycleEvent,
 )
+from paperflow_story_storage import StoryRepositoryMixin
 from paperflow_settings import StorageSettings
 from paperflow_ingest_models import SourceObservation
 from paperflow_storage import (
@@ -41,6 +42,20 @@ TABLES: dict[type[Record], tuple[str, tuple[str, ...]]] = {
 }
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS research_reader_ratings (
+    reader_hash TEXT NOT NULL, kind TEXT NOT NULL, target_id TEXT NOT NULL,
+    version TEXT NOT NULL, rating TEXT NOT NULL CHECK(rating IN ('helpful','needs_work')),
+    PRIMARY KEY(reader_hash,kind,target_id,version)
+);
+CREATE TABLE IF NOT EXISTS research_public_revisions (revision_id TEXT PRIMARY KEY REFERENCES research_revisions(id));
+CREATE TABLE IF NOT EXISTS research_stories (id TEXT PRIMARY KEY, version INTEGER NOT NULL, payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS research_story_versions (story_id TEXT NOT NULL REFERENCES research_stories(id), version INTEGER NOT NULL, payload TEXT NOT NULL, assessment_ids TEXT NOT NULL, PRIMARY KEY(story_id, version));
+CREATE TABLE IF NOT EXISTS research_story_assessments (id TEXT PRIMARY KEY, revision_id TEXT NOT NULL REFERENCES research_revisions(id), story_id TEXT REFERENCES research_stories(id), payload TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS story_assessment_revision ON research_story_assessments(revision_id);
+CREATE INDEX IF NOT EXISTS story_assessment_story ON research_story_assessments(story_id);
+CREATE TABLE IF NOT EXISTS research_story_sources (story_id TEXT NOT NULL REFERENCES research_stories(id), item_id TEXT NOT NULL REFERENCES research_items(id), payload TEXT NOT NULL, PRIMARY KEY(story_id,item_id));
+CREATE TABLE IF NOT EXISTS research_story_pending (assessment_id TEXT PRIMARY KEY REFERENCES research_story_assessments(id), story_id TEXT NOT NULL REFERENCES research_stories(id));
+
 CREATE TABLE IF NOT EXISTS editorial_topics (
  id TEXT PRIMARY KEY, topic_key TEXT NOT NULL UNIQUE, payload TEXT NOT NULL
 );
@@ -154,7 +169,7 @@ CREATE INDEX IF NOT EXISTS research_claim_review_claim ON research_claim_reviews
 """
 
 
-class SQLiteResearchRepository:
+class SQLiteResearchRepository(StoryRepositoryMixin):
     def __init__(self, connection: sqlite3.Connection):
         self._conn = connection
 
@@ -458,6 +473,35 @@ class SQLiteResearchRepository:
         clause = " WHERE " + " AND ".join(where) if where else ""
         rows = self._conn.execute("SELECT i.payload FROM research_items i" + clause + " ORDER BY i.rowid DESC LIMIT ? OFFSET ?",
                                   (*params, limit, offset))
+        return [Item.model_validate_json(row[0]) for row in rows]
+
+    def save_reader_rating(self, reader, kind, target_id, version, rating):
+        self._conn.execute("""INSERT INTO research_reader_ratings VALUES (?,?,?,?,?)
+            ON CONFLICT(reader_hash,kind,target_id,version) DO UPDATE SET rating=excluded.rating""",
+            (reader, kind, str(target_id), version, rating))
+
+    def mark_public_revision(self, revision_id):
+        self._conn.execute('INSERT OR IGNORE INTO research_public_revisions VALUES (?)', (str(revision_id),))
+
+    def is_public_revision(self, revision_id):
+        # Old ingests have no marker. A byte-identical stored feed excerpt is
+        # independently provable from its immutable observation.
+        if self._conn.execute("SELECT 1 FROM sqlite_master WHERE name='research_public_revisions'").fetchone():
+            if self._conn.execute("SELECT 1 FROM research_public_revisions WHERE revision_id=?",
+                                  (str(revision_id),)).fetchone():
+                return True
+        row = self._conn.execute("""SELECT 1 FROM research_revisions r
+            JOIN research_source_observations o ON o.item_id=r.item_id
+            WHERE r.id=? AND json_extract(o.payload,'$.entry.excerpt')=json_extract(r.payload,'$.markdown')
+              AND length(json_extract(o.payload,'$.entry.excerpt'))>0 LIMIT 1""", (str(revision_id),)).fetchone()
+        return bool(row)
+
+    def publication_items(self, channel, cutoff, limit):
+        rows = self._conn.execute("""SELECT i.payload FROM research_items i
+            WHERE EXISTS (SELECT 1 FROM research_source_observations o WHERE o.item_id=i.id AND o.channel=?)
+              AND julianday(COALESCE(json_extract(i.payload,'$.published_at'), json_extract(i.payload,'$.created_at'))) >= julianday(?)
+            ORDER BY julianday(COALESCE(json_extract(i.payload,'$.published_at'), json_extract(i.payload,'$.created_at'))) DESC, i.id
+            LIMIT ?""", (channel, cutoff.isoformat(), limit))
         return [Item.model_validate_json(row[0]) for row in rows]
 
     def revisions_for_item(self, item_id: UUID) -> list[ContentRevision]:
