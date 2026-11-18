@@ -19,6 +19,11 @@ def encode(value):
     return json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
+def assessment_key(fingerprint, revision_id):
+    from paperflow_assistant.stories import RULE_VERSION
+    return hashlib.sha256(f'{RULE_VERSION}:{fingerprint}{revision_id}'.encode()).hexdigest()
+
+
 class AssistantStore:
     def __init__(self, path):
         self.path = Path(path)
@@ -63,6 +68,11 @@ class AssistantStore:
         try:
             rows = source.execute("""SELECT r.rowid,r.payload,i.payload FROM research_revisions r
                 JOIN research_items i ON i.id=r.item_id WHERE r.rowid>? ORDER BY r.rowid LIMIT ?""", (cursor, batch)).fetchall()
+            public_revisions = {row[0] for row in source.execute("""SELECT r.id FROM research_revisions r
+                WHERE EXISTS (SELECT 1 FROM research_public_revisions p WHERE p.revision_id=r.id)
+                   OR EXISTS (SELECT 1 FROM research_source_observations o WHERE o.item_id=r.item_id
+                      AND length(json_extract(o.payload,'$.entry.excerpt'))>0
+                      AND json_extract(o.payload,'$.entry.excerpt')=json_extract(r.payload,'$.markdown'))""")}
         finally:
             source.close()
         with self.connection(True) as conn:
@@ -76,12 +86,17 @@ class AssistantStore:
                                  (rev['id'], item['title'], start, rev['markdown'][start:start+3000], rev['created_at']))
                 cursor = rowid
             conn.execute("INSERT OR REPLACE INTO assistant_meta VALUES ('source_cursor',?)", (str(cursor),))
-            docs = conn.execute("SELECT revision_id FROM assistant_documents WHERE kind IN ('paper','article','discussion')").fetchall()
+            docs = conn.execute("SELECT revision_id,item_id FROM assistant_documents WHERE kind IN ('paper','article','discussion')").fetchall()
             for doc in docs:
                 key = hashlib.sha256((fingerprint + doc[0]).encode()).hexdigest()
                 conn.execute("""INSERT OR IGNORE INTO assistant_jobs
                     (id,revision_id,fingerprint,status,queued_at,available_at) VALUES (?,?,?,'queued',?,?)""",
                              (key, doc[0], fingerprint, time.time(), time.time()))
+                if doc[0] not in public_revisions:
+                    continue
+                assessment_id = assessment_key(fingerprint, doc[0])
+                conn.execute("INSERT OR IGNORE INTO assistant_jobs (id,revision_id,fingerprint,status,queued_at,available_at) VALUES (?,?,?,'queued',?,?)", (assessment_id, doc[0], fingerprint, time.time(), time.time()))
+                conn.execute("INSERT OR IGNORE INTO assistant_story_jobs (job_id,revision_id) VALUES (?,?)", (assessment_id, doc[0]))
         return len(rows)
 
     def claim(self, max_attempts, daily_attempt_limit=100, priority_revisions=(), fingerprint=None):
@@ -93,21 +108,77 @@ class AssistantStore:
                 return None
             conn.execute("UPDATE assistant_jobs SET status='failed',error='AttemptsExhausted' WHERE status='queued' AND attempts>=?", (max_attempts,))
             priority = {str(rev): rank for rank, rev in enumerate(priority_revisions)}
+            conn.create_function('current_assessment', 2, assessment_key, deterministic=True)
             conn.create_function('publication_rank', 1, lambda rev: priority.get(rev, len(priority)))
+            last_stage = conn.execute("SELECT value FROM assistant_meta WHERE key='last_story_stage'").fetchone()
+            prefer = 'curation' if last_stage and last_stage[0] == 'assessment' else 'assessment'
+            conn.create_function('stage_rank', 1, lambda is_assessment: int(('assessment' if is_assessment else 'curation') != prefer))
             row = conn.execute("""SELECT j.* FROM assistant_jobs j
                 JOIN assistant_documents d ON d.revision_id=j.revision_id
                 WHERE j.status='queued' AND j.available_at<=?
                 AND (? IS NULL OR j.fingerprint=?)
-                AND NOT EXISTS (SELECT 1 FROM assistant_documents newer
-                    WHERE newer.item_id=d.item_id AND newer.rowid>d.rowid)
-                ORDER BY publication_rank(j.revision_id),json_extract(d.revision,'$.created_at') DESC,j.queued_at,j.id LIMIT 1""", (time.time(), fingerprint, fingerprint)).fetchone()
+                AND (
+                    j.id=current_assessment(j.fingerprint,j.revision_id)
+                    OR (NOT EXISTS (SELECT 1 FROM assistant_story_jobs sj WHERE sj.job_id=j.id)
+                        AND NOT EXISTS (SELECT 1 FROM assistant_story_jobs sj
+                            JOIN assistant_jobs a ON a.id=sj.job_id
+                            WHERE sj.job_id=current_assessment(j.fingerprint,j.revision_id)
+                            AND (a.status!='succeeded' OR sj.outcome NOT IN ('new_story','material_contribution')))))
+                AND (EXISTS (SELECT 1 FROM assistant_story_jobs sj WHERE sj.revision_id=j.revision_id)
+                     OR NOT EXISTS (SELECT 1 FROM assistant_documents newer WHERE newer.item_id=d.item_id AND newer.rowid>d.rowid))
+                ORDER BY stage_rank(EXISTS (SELECT 1 FROM assistant_story_jobs sj WHERE sj.job_id=j.id)),
+                publication_rank(j.revision_id), CASE WHEN EXISTS (SELECT 1 FROM assistant_story_jobs sj WHERE sj.job_id=j.id)
+                    THEN d.rowid ELSE -d.rowid END,j.queued_at,j.id LIMIT 1""", (time.time(), fingerprint, fingerprint)).fetchone()
             if row is None:
                 return None
             conn.execute("INSERT OR REPLACE INTO assistant_meta VALUES (?,?)", ('attempts:'+today, str(count+1)))
+            stage = 'assessment' if conn.execute('SELECT 1 FROM assistant_story_jobs WHERE job_id=?', (row['id'],)).fetchone() else 'curation'
+            conn.execute("INSERT OR REPLACE INTO assistant_meta VALUES ('last_story_stage',?)", (stage,))
             conn.execute("UPDATE assistant_jobs SET status='running',attempts=attempts+1,started_at=?,error=NULL,usage=NULL,finished_at=NULL,duration=NULL WHERE id=?", (time.time(), row['id']))
             conn.execute("INSERT INTO assistant_attempts (job_id,attempt,status,started_at) VALUES (?,?,'running',?)",
                          (row['id'], row['attempts']+1, time.time()))
             return dict(conn.execute("SELECT * FROM assistant_jobs WHERE id=?", (row['id'],)).fetchone())
+
+    def story_job(self, job_id):
+        with self.connection() as conn:
+            row = conn.execute("SELECT * FROM assistant_story_jobs WHERE job_id=?", (job_id,)).fetchone()
+            return dict(row) if row else None
+
+    def story_for_revision(self, revision_id, fingerprint):
+        with self.connection() as conn:
+            row = conn.execute("SELECT s.* FROM assistant_story_jobs s JOIN assistant_jobs j ON j.id=s.job_id WHERE s.job_id=? AND j.status='succeeded'", (assessment_key(fingerprint, str(revision_id)),)).fetchone()
+            return dict(row) if row else None
+
+    def finish_story_job(self, job, assessment, usage, duration, *, already_published=False):
+        with self.connection(True) as conn:
+            conn.execute("UPDATE assistant_story_jobs SET story_id=?,outcome=?,assessment_id=? WHERE job_id=?", (str(assessment.story_id) if assessment.story_id else None, assessment.outcome, str(assessment.id), job['id']))
+            conn.execute("UPDATE assistant_jobs SET status='succeeded',finished_at=?,usage=?,duration=? WHERE id=? AND status='running'", (time.time(), encode(usage), duration, job['id']))
+            conn.execute("UPDATE assistant_attempts SET status='succeeded',finished_at=?,usage=? WHERE job_id=? AND status='running'", (time.time(), encode(usage), job['id']))
+            if already_published or assessment.outcome in ('repeated_coverage', 'unresolved'):
+                conn.execute("UPDATE assistant_jobs SET status='suppressed',finished_at=? WHERE revision_id=? AND fingerprint=? AND status='queued' AND id NOT IN (SELECT job_id FROM assistant_story_jobs)", (time.time(), job['revision_id'], job['fingerprint']))
+            elif assessment.story_id:
+                conn.execute("UPDATE assistant_jobs SET status='suppressed',finished_at=? WHERE status='queued' AND fingerprint=? AND revision_id<>? AND id NOT IN (SELECT job_id FROM assistant_story_jobs) AND revision_id IN (SELECT revision_id FROM assistant_story_jobs WHERE story_id=?)", (time.time(), job['fingerprint'], job['revision_id'], str(assessment.story_id)))
+                # Preserve historical source analyses and their attempt ledger. A new
+                # synthesis needs its own retry budget after a terminal source job.
+                pending = conn.execute("""SELECT 1 FROM assistant_jobs
+                    WHERE revision_id=? AND fingerprint=? AND status='queued'
+                    AND id NOT IN (SELECT job_id FROM assistant_story_jobs)""",
+                    (job['revision_id'], job['fingerprint'])).fetchone()
+                if not pending:
+                    update_id = hashlib.sha256(f"story-curation:{assessment.id}".encode()).hexdigest()
+                    conn.execute("""INSERT OR IGNORE INTO assistant_jobs
+                        (id,revision_id,fingerprint,status,queued_at,available_at)
+                        VALUES (?,?,?,'queued',?,?)""",
+                        (update_id, job['revision_id'], job['fingerprint'], time.time(), time.time()))
+
+    def stage_publication(self, job_id, payload):
+        with self.connection(True) as conn:
+            conn.execute("INSERT OR REPLACE INTO assistant_story_publications VALUES (?,?)", (job_id, encode(payload)))
+
+    def staged_publication(self, job_id):
+        with self.connection() as conn:
+            row = conn.execute("SELECT payload FROM assistant_story_publications WHERE job_id=?", (job_id,)).fetchone()
+            return json.loads(row[0]) if row else None
 
     def reserve_content_fetch(self, item_id, daily_attempt_limit):
         """Persist a cooldown so inaccessible sources cannot monopolize the worker."""
@@ -231,7 +302,7 @@ class AssistantStore:
         since = time.time()-days*86400
         with self.connection() as conn:
             rows = conn.execute('SELECT * FROM assistant_requests WHERE started_at>=? ORDER BY started_at', (since,)).fetchall()
-            completed = conn.execute("SELECT COUNT(*) FROM assistant_jobs WHERE status='succeeded' AND finished_at>=?", (since,)).fetchone()[0]
+            completed = conn.execute("SELECT COUNT(*) FROM assistant_jobs WHERE status='succeeded' AND output IS NOT NULL AND finished_at>=?", (since,)).fetchone()[0]
         groups, daily = {}, {}
         total, retry_cost = Decimal(0), Decimal(0)
         missing, pending, priced = 0, 0, 0
@@ -285,7 +356,7 @@ class AssistantStore:
         with self.connection() as conn:
             row = conn.execute("""SELECT j.id,j.revision_id,j.output,j.validation,j.evaluation FROM assistant_jobs j
                 JOIN assistant_documents d ON d.revision_id=j.revision_id
-                WHERE d.item_id=? AND j.status='succeeded' ORDER BY j.finished_at DESC LIMIT 1""", (str(item_id),)).fetchone()
+                WHERE d.item_id=? AND j.status='succeeded' AND j.output IS NOT NULL ORDER BY j.finished_at DESC LIMIT 1""", (str(item_id),)).fetchone()
         if not row:
             return None
         # Explicit public projection. Never return arbitrary records from the private store.
@@ -294,9 +365,24 @@ class AssistantStore:
                 'analysis': Analysis.model_validate_json(row['output']).model_dump(mode='json'),
                 'validation': json.loads(row['validation']), 'evaluation': json.loads(row['evaluation'])}
 
+    def analysis_for_run(self, item_id, run_id):
+        """Read a specific completed analysis without exposing internal job fields."""
+        with self.connection() as conn:
+            row = conn.execute("""SELECT j.id,j.revision_id,j.output FROM assistant_jobs j
+                JOIN assistant_documents d ON d.revision_id=j.revision_id
+                WHERE d.item_id=? AND j.id=? AND j.status='succeeded' AND j.output IS NOT NULL""",
+                (str(item_id), str(run_id))).fetchone()
+        if not row:
+            return None
+        from paperflow_assistant.models import Analysis
+        return {'run_id': row['id'], 'revision_id': row['revision_id'],
+                'analysis': Analysis.model_validate_json(row['output']).model_dump(mode='json')}
+
     def runs(self, limit=20, include_content=False):
         with self.connection() as conn:
-            rows = conn.execute('SELECT * FROM assistant_jobs ORDER BY queued_at DESC,id LIMIT ?', (min(max(limit, 1), 100),)).fetchall()
+            rows = conn.execute("""SELECT j.*, s.outcome AS story_outcome, s.assessment_id
+                FROM assistant_jobs j LEFT JOIN assistant_story_jobs s ON s.job_id=j.id
+                ORDER BY j.queued_at DESC,j.id LIMIT ?""", (min(max(limit, 1), 100),)).fetchall()
         result = []
         for row in rows:
             value = dict(row)
@@ -359,12 +445,17 @@ class AssistantStore:
 
     def metrics(self):
         with self.connection() as conn:
-            counts = dict(conn.execute('SELECT status,COUNT(*) FROM assistant_jobs GROUP BY status').fetchall())
+            counts = dict(conn.execute("""SELECT status,COUNT(*) FROM assistant_jobs
+                WHERE id NOT IN (SELECT job_id FROM assistant_story_jobs) GROUP BY status"""))
+            assessment_counts = dict(conn.execute("""SELECT j.status,COUNT(*) FROM assistant_story_jobs s
+                JOIN assistant_jobs j ON j.id=s.job_id GROUP BY j.status"""))
+            assessment_outcomes = dict(conn.execute("""SELECT outcome,COUNT(*) FROM assistant_story_jobs
+                WHERE outcome IS NOT NULL GROUP BY outcome"""))
             total_items = conn.execute('SELECT COUNT(DISTINCT item_id) FROM assistant_documents').fetchone()[0]
-            eligible = conn.execute('SELECT COUNT(*) FROM assistant_jobs').fetchone()[0]
+            eligible = sum(counts.values()) - counts.get('suppressed', 0)
             retries = conn.execute('SELECT COALESCE(SUM(MAX(attempts-1,0)),0) FROM assistant_jobs').fetchone()[0]
             backlog = conn.execute("SELECT MIN(queued_at) FROM assistant_jobs WHERE status='queued'").fetchone()[0]
-            rows = conn.execute("SELECT validation,evaluation,usage,duration FROM assistant_jobs WHERE status='succeeded'").fetchall()
+            rows = conn.execute("SELECT validation,evaluation,usage,duration FROM assistant_jobs WHERE status='succeeded' AND output IS NOT NULL").fetchall()
             memories = conn.execute("""SELECT kind,COUNT(*) FROM assistant_memory m WHERE version=(SELECT MAX(version) FROM assistant_memory v WHERE v.id=m.id)
                 AND status NOT IN ('resolved','dismissed','superseded') GROUP BY kind""").fetchall()
             attempt_counts = dict(conn.execute('SELECT status,COUNT(*) FROM assistant_attempts GROUP BY status').fetchall())
@@ -397,7 +488,8 @@ class AssistantStore:
             entry['pass_rate'] = entry['passed']/entry['n']
             entry['pass_rate_interval_95'] = wilson(entry['passed'], entry['n'])
         all_usage = {key: sum(json.loads(row[0]).get(key, 0) for row in attempts) for key in usage_totals}
-        return {"counts": counts, "attempt_counts": attempt_counts, "usage_all_attempts": all_usage,
+        return {"counts": counts, "story_assessments": {"counts": assessment_counts, "outcomes": assessment_outcomes},
+                "attempt_counts": attempt_counts, "usage_all_attempts": all_usage,
                 "usage_limitations": "Provider-reported usage only. Interrupted or failed requests can incur unreported usage.",
                 "job_unit": "source revision and harness configuration",
                 "eligible_jobs": eligible, "indexed_items": total_items, "retries": retries,
@@ -422,6 +514,8 @@ CREATE TABLE IF NOT EXISTS assistant_jobs (
  attempts INTEGER DEFAULT 0,started_at REAL,finished_at REAL,error TEXT,output TEXT,validation TEXT,evaluation TEXT,usage TEXT,duration REAL
 );
 CREATE INDEX IF NOT EXISTS assistant_jobs_status ON assistant_jobs(status,available_at);
+CREATE TABLE IF NOT EXISTS assistant_story_publications (job_id TEXT PRIMARY KEY,payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS assistant_story_jobs (job_id TEXT PRIMARY KEY,revision_id TEXT NOT NULL,story_id TEXT,outcome TEXT,assessment_id TEXT);
 CREATE TABLE IF NOT EXISTS assistant_attempts (job_id TEXT,attempt INTEGER,status TEXT,started_at REAL,finished_at REAL,usage TEXT,error TEXT,PRIMARY KEY(job_id,attempt));
 CREATE TABLE IF NOT EXISTS assistant_requests (id TEXT PRIMARY KEY,job_id TEXT,attempt INTEGER,role TEXT,model TEXT,started_at REAL,payload TEXT);
 CREATE TABLE IF NOT EXISTS assistant_tool_events (job_id TEXT,name TEXT,outcome TEXT,created_at REAL);

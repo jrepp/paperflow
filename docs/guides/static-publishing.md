@@ -73,10 +73,20 @@ retention and must preserve releases still being transferred or served.
 The command `paperflow publish site` remains available for local exports. Avoid
 running a separate scheduled exporter into the service-managed releases tree.
 
+## Stories and source disclosure
+
+Published stories appear once in Latest, ordered by their last material update.
+Open **Sources** to inspect all attached sources, their assessed contributions,
+evidence basis, and any supporting passages or missing evidence. An assessment
+of an older revision is marked; an account awaiting material updates is also
+identified. The story headline opens the current account as formatted text and
+provides a download. Repeated coverage does not move a story. Existing items
+without a published story continue to appear as item cards during rollout.
+
 ## Expandable curation cards
 
 Published links show the model summary and evidence basis directly on each card.
-Open **Curation & details**
+Open the disclosure labeled with the available sources, findings or details
 with a click or keyboard to inspect source metadata, observed score and comment
 counts, discussion links, and model curation when available. Missing counts remain
 absent; zero counts are displayed. Source excerpts are labeled separately from
@@ -88,8 +98,24 @@ category, and evidence limits. Internal memory, tool activity, costs, and privat
 run diagnostics are excluded. Publishing does not run a model or initialize the
 assistant database.
 
-**Read curation Markdown** opens the full document inside the static page, including
+The reading view opens the full document inside the static page, including
 citations, limitations, bias assessments, research gaps, and downstream hypotheses.
 **Download Markdown** saves the same document as a `.md` file. Documents use stable
 item fragment links and are embedded in `index.html`, preserving the two-file
 release and digest verification contract; no private workspace access is needed.
+
+## Reader ratings
+
+The reader can mark a particular story version or item analysis helpful or in
+need of work. A successful vote closes the open view and returns keyboard focus.
+Readers can close without voting. Failed saves stay open for retry.
+
+The public gateway forwards only the ratings POST to the live application. Set
+`PAPERFLOW_RATING_GATEWAY_TOKEN_FILE` to a protected file shared with the gateway.
+The gateway replaces the client address header with its verified connection
+address and supplies the token. The application derives a pseudonym from the
+address, User-Agent and Accept-Language using HMAC-SHA256. Its separate
+`.rating-reader-key` lives beside the token file. Back up that key privately to
+preserve continuity across restarts. Rating rows contain the pseudonym, target,
+version and vote. There is no reader account. A shared browser/network can share
+an identifier, and a network or browser change can produce another.

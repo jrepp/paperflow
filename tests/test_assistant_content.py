@@ -105,3 +105,30 @@ def test_connection_checks_the_address_actually_used(monkeypatch):
     monkeypatch.setattr(socket, 'socket', lambda *a: pytest.fail('Private address must never be connected'))
     with pytest.raises(ValueError):
         public_connection(('source.example', 80))
+
+
+def test_refetch_claims_exact_legacy_public_content_without_duplicates(tmp_path, monkeypatch):
+    settings = ResearchSettings(storage={'path': tmp_path/'research.db'}, assistant={'path': tmp_path/'assistant.db'})
+    storage = SQLiteResearchStorage(settings.storage)
+    storage.initialize()
+    persist_batch(storage, IngestBatch(channel='news', config=ChannelConfig(url='https://example.com/feed'),
+        entries=(SourceEntry(source_id='id', title='Source', url='https://example.com/article'),)))
+    with storage.transaction(write=True) as repo:
+        item = repo.items()[0]
+        legacy = repo.add(ContentRevision.from_markdown(item_id=item.id, markdown='Public source content '*60,
+                                                       processor_version='public-content-v1'))
+        assert not repo.is_public_revision(legacy.id)
+    fetches = []
+    def extract(item, url):
+        fetches.append(url)
+        return ContentRevision.from_markdown(item_id=item.id, markdown='Public source content '*60,
+                                             processor_version='public-content-v1')
+    monkeypatch.setattr('paperflow_assistant.content.source_revision', extract)
+    worker = AssistantWorker(settings)
+    worker.initialize()
+    assert worker.publication_priority() == [str(legacy.id)]
+    assert worker.publication_priority() == [str(legacy.id)]
+    with storage.transaction() as repo:
+        assert repo.is_public_revision(legacy.id)
+        assert len(repo.revisions_for_item(item.id)) == 1
+    assert len(fetches) == 1

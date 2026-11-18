@@ -24,6 +24,10 @@ WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --locked --no-dev --no-install-project
 
+ENV PAPERFLOW_STORY_MODEL_DIR=/opt/paperflow/story-model
+COPY paperflow_story_vectors.py ./
+RUN /app/.venv/bin/python paperflow_story_vectors.py
+
 COPY paperflow_reader ./paperflow_reader
 COPY paperflow_assistant ./paperflow_assistant
 COPY *.py ./

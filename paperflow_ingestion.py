@@ -101,4 +101,5 @@ def persist_batch_in_repository(repo: ResearchRepository, batch: IngestBatch) ->
             revision_id = uuid5(item.id, "feed-excerpt-v1:" + revision.content_hash)
             if repo.get(ContentRevision, revision_id) is None:
                 repo.add(revision.model_copy(update={"id": revision_id}))
+            repo.mark_public_revision(revision_id)
     return len(batch.entries)

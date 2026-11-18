@@ -44,14 +44,21 @@ def validate_citations(refs, storage):
                 citation.quote = revision.markdown[actual_start:actual_end]
 
 
-def validate_analysis(analysis, revision, settings, storage):
+def validate_analysis(analysis, revision, settings, storage, *, public_only=False, pending=()):
     if analysis.evidence_basis != revision.evidence_basis:
         raise ValueError("Analysis misstates evidence basis")
     if analysis.category not in settings.categories:
         raise ValueError("Category is outside the configured taxonomy")
     refs = citations(analysis)
-    if revision.id not in {c.revision_id for c in refs}:
+    cited = {str(c.revision_id) for c in refs}
+    if any(str(change['revision_id']) not in cited for change in pending):
+        raise ValueError("The story account must cite every pending contribution")
+    if str(revision.id) not in cited:
         raise ValueError("Analysis must cite the input revision")
+    if public_only:
+        with storage.transaction() as repo:
+            if any(not repo.is_public_revision(c.revision_id) for c in refs):
+                raise ValueError("Public analysis cannot cite private revisions")
     validate_citations(refs, storage)
     for effect in analysis.effects:
         if len(effect.mechanism) < effect.order:
