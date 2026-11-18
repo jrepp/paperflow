@@ -236,7 +236,8 @@ def test_missing_curation_does_not_mislabel_source_excerpt(tmp_path):
     build_site_from_storage(storage, out)
     page = (out / 'index.html').read_text()
     assert 'No model curation available yet.' in page
-    assert page.index('Model curation unavailable.') < page.index('<details class="curation-card">')
+    assert 'Model curation unavailable.' not in page
+    assert page.index('<details class="curation-card">') < page.index('No model curation available yet.')
     assert 'Model analysis' not in page
     assert 'Read curation Markdown' not in page
 
@@ -573,6 +574,6 @@ def test_unanalysed_item_has_source_disclosure_but_no_rating():
     from paperflow_publish_site import _card
 
     result = _card(Item(kind='article', title='A fresh source'), {})
-    assert 'Explore A fresh source' in result
+    assert 'for A fresh source"' in result
     assert 'Source details' in result
     assert 'data-rating=' not in result

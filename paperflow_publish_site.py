@@ -297,12 +297,13 @@ def _story_row(row, now, anchors):
     esc = html.escape
     summary = next((line.strip() for line in story.account.splitlines() if line.strip() and not line.lstrip().startswith('#')), '')
     parts = [f'<li class="feed-row"><article id="story-{story.id}" tabindex="-1">',
-             '<div class="meta item-meta">Updated ' + esc(_age_text(story.material_at, now)) + '</div>',
              '<h2><a href="#story-account-' + str(story.id) + '">' + esc(story.title) + '</a></h2>',
+             '<div class="meta item-meta">Updated ' + esc(_age_text(story.material_at, now)) + '</div>',
              '<p>' + esc(summary) + '</p>',
              '<p><a class="read-story" href="#story-account-' + str(story.id) + '">Read story</a></p>',
-             '<details class="curation-card"><summary><span>Explore ' + esc(story.title) + '</span>'
-             + '<span class="card-count">' + str(len(row['sources'])) + (' source' if len(row['sources']) == 1 else ' sources')
+             '<details class="curation-card"><summary aria-label="Details ' + str(len(row['sources']))
+             + (' source' if len(row['sources']) == 1 else ' sources') + ' for ' + esc(story.title, quote=True) + '"><span>Details</span>'
+             + ' <span class="card-count">' + str(len(row['sources'])) + (' source' if len(row['sources']) == 1 else ' sources')
              + '</span></summary><div class="curation-body">'
              + _card_actions('story', story.id, story.version) + '<ul>']
     if row.get('pending'):
@@ -441,12 +442,9 @@ def _card(item, card):
         parts.append('<div class="model-summary"><h3>Model analysis</h3><p>'
                      + esc(result['analysis']['summary']) + '</p><p class="muted">Evidence: '
                      + esc(result['analysis']['evidence_basis'].replace('_', ' ')) + '</p></div>')
-    if not result and not legacy:
-        parts.append('<p class="muted">Model curation unavailable.</p>')
-    count = len(result['analysis']['findings']) if result else 0
-    description = (str(count) + (' finding' if count == 1 else ' findings')) if result else 'Source details'
-    parts += ['<details class="curation-card"><summary><span>Explore ' + esc(item.title)
-             + '</span><span class="card-count">' + description + '</span></summary><div class="curation-body">']
+    description = '1 source' if item.canonical_url else 'Source details'
+    parts += ['<details class="curation-card"><summary aria-label="Details ' + esc(description, quote=True) + ' for ' + esc(item.title, quote=True)
+             + '"><span>Details</span> <span class="card-count">' + description + '</span></summary><div class="curation-body">']
     version = result['run_id'] if result else card.get('legacy_run_id')
     parts.append(_card_actions('item', item.id, version) if version else _card_actions())
     if links:
@@ -532,7 +530,7 @@ def _item_li(pair: tuple[datetime, object], now: datetime, cards: dict, suffix: 
     age = html.escape(_age_text(when, now))
     ref = f'<a href="{url}">{title}</a>' if url else title
     meta = f"{host} · {age}" if host else age
-    return f'<li class="feed-row"><article id="item-{item.id}{suffix}" tabindex="-1"><div class="meta item-meta">{meta}</div><h2>{ref}</h2>{_card(item, cards.get(item.id, {}))}<p class="rating-receipt" hidden></p></article></li>'
+    return f'<li class="feed-row"><article id="item-{item.id}{suffix}" tabindex="-1"><h2>{ref}</h2><div class="meta item-meta">{meta}</div>{_card(item, cards.get(item.id, {}))}<p class="rating-receipt" hidden></p></article></li>'
 
 
 def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None = None, cards: dict | None = None, stories: list[dict] | None = None) -> str:
@@ -553,17 +551,16 @@ def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None =
         '<meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
         "<title>Paperflow</title>",
-        "<style>" + stylesheet + "</style></head><body>",
+        "<style>" + stylesheet + "</style></head><body class=\"published-page\">",
         '<a class="skip" href="#main">Skip to content</a>',
         '<header class="masthead"><div class="shell topbar">'
-        '<a href="./" class="brand" aria-label="Paperflow home">Paperflow '
-        '</a></div><div class="shell">',
-        '<p class="muted published-intro">Recent reading from all sources. <strong>AI curation</strong> · Ratings are pseudonymous.</p>',
+        '<a href="./" class="brand" aria-label="Paperflow home">Paperflow</a>'
         '<details class="rating-privacy"><summary>How ratings work</summary>'
         '<p>Ratings use a private browser identifier to count repeat votes once. The service hashes your IP address '
         'and browser request headers and stores the rating identifier without the raw inputs.</p></details></div></header>',
         '<main id="main" class="shell py-8" tabindex="-1">',
         '<h1>Latest Stories</h1>',
+        '<p class="muted published-intro">Recent reading from all sources. <strong>AI curation</strong> · Ratings are pseudonymous.</p>',
         '<details class="rating-privacy"><summary>How stories are selected</summary>'
         f'<p>The feed selects up to {limit} recent items per source from the past {window}, '
         'using the publication date when available. Stories appear when at least one of their sources '
