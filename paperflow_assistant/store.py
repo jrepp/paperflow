@@ -165,8 +165,10 @@ class AssistantStore:
             row = conn.execute("SELECT s.* FROM assistant_story_jobs s JOIN assistant_jobs j ON j.id=s.job_id WHERE s.job_id=? AND j.status='succeeded'", (assessment_key(fingerprint, str(revision_id)),)).fetchone()
             return dict(row) if row else None
 
-    def finish_story_job(self, job, assessment, usage, duration, *, already_published=False):
+    def finish_story_job(self, job, assessment, usage, duration, *, already_published=False, category=None):
         with self.connection(True) as conn:
+            if category is not None:
+                conn.execute("INSERT OR REPLACE INTO assistant_classifications VALUES (?,?,?)", (job['revision_id'], category, job['id']))
             conn.execute("UPDATE assistant_story_jobs SET story_id=?,outcome=?,assessment_id=? WHERE job_id=?", (str(assessment.story_id) if assessment.story_id else None, assessment.outcome, str(assessment.id), job['id']))
             conn.execute("UPDATE assistant_jobs SET status='succeeded',finished_at=?,usage=?,duration=? WHERE id=? AND status='running'", (time.time(), encode(usage), duration, job['id']))
             conn.execute("UPDATE assistant_attempts SET status='succeeded',finished_at=?,usage=? WHERE job_id=? AND status='running'", (time.time(), encode(usage), job['id']))
@@ -186,6 +188,14 @@ class AssistantStore:
                         (id,revision_id,fingerprint,status,queued_at,available_at)
                         VALUES (?,?,?,'queued',?,?)""",
                         (update_id, job['revision_id'], job['fingerprint'], time.time(), time.time()))
+
+    def classification(self, item_id):
+        with self.connection() as conn:
+            row = conn.execute("""SELECT c.category,c.job_id FROM assistant_classifications c
+                JOIN assistant_documents d ON d.revision_id=c.revision_id
+                WHERE d.item_id=? AND d.rowid=(SELECT MAX(x.rowid) FROM assistant_documents x WHERE x.item_id=d.item_id)
+                LIMIT 1""", (str(item_id),)).fetchone()
+        return dict(row) if row else None
 
     def stage_publication(self, job_id, payload):
         with self.connection(True) as conn:
@@ -527,6 +537,7 @@ CREATE TABLE IF NOT EXISTS assistant_jobs (
 );
 CREATE INDEX IF NOT EXISTS assistant_jobs_status ON assistant_jobs(status,available_at);
 CREATE TABLE IF NOT EXISTS assistant_story_publications (job_id TEXT PRIMARY KEY,payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS assistant_classifications (revision_id TEXT PRIMARY KEY,category TEXT NOT NULL,job_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS assistant_story_jobs (job_id TEXT PRIMARY KEY,revision_id TEXT NOT NULL,story_id TEXT,outcome TEXT,assessment_id TEXT);
 CREATE TABLE IF NOT EXISTS assistant_attempts (job_id TEXT,attempt INTEGER,status TEXT,started_at REAL,finished_at REAL,usage TEXT,error TEXT,PRIMARY KEY(job_id,attempt));
 CREATE TABLE IF NOT EXISTS assistant_requests (id TEXT PRIMARY KEY,job_id TEXT,attempt INTEGER,role TEXT,model TEXT,started_at REAL,payload TEXT);

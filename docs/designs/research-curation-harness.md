@@ -202,8 +202,12 @@ work. An expensive cycle can take longer than its configured interval. Change `e
 against overhead, and compare quality estimates before reducing that coverage.
 
 The worker prioritizes papers within the recent items selected for static
-publication, followed by other sources. The reasoning model assesses source contributions and writes substantive accounts;
-the decision model performs bounded evidence and repeat-coverage judgments. Before model work, it attempts bounded public content retrieval for
+publication, followed by other sources. The reasoning model assesses source
+contributions and writes substantive accounts; the decision model selects an
+allowed topic category and performs bounded evidence and repeat-coverage judgments.
+The topic curator uses the latest revision's decision-model category when available
+and falls back to completed analysis for older work. Uncertain categories can
+remain unassigned. Before model work, it attempts bounded public content retrieval for
 one visible item per cycle, including items without a feed excerpt. Article/main
 HTML is extracted without navigation or scripts; arXiv links prefer paper HTML
 and fall back to PDF when unavailable. PDF extraction is limited to 100 pages.

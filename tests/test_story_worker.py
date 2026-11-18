@@ -356,3 +356,36 @@ def test_story_assessment_uses_reasoning_model(tmp_path, monkeypatch):
     worker.initialize()
     assert worker.tick()['outcome'] == 'new_story'
     assert seen == [reasoning_model]
+
+
+def test_decision_classification_feeds_topic_selection(tmp_path, monkeypatch):
+    from paperflow_assistant.topics import AssistantTopicCurator
+    from paperflow_topic_models import TopicCandidate, TopicSettings
+    monkeypatch.setattr('paperflow_story_vectors.semantic_candidates', lambda *args, **kwargs: [])
+    settings, storage, item, rev, output = fixture(tmp_path)
+    observe(storage, item)
+    def classify(ctx, source, candidates):
+        return {**decision('new_story', text=ctx.revision.markdown), 'category': 'computing'}
+    worker = AssistantWorker(settings, runner=runner(output), assessment_runner=classify)
+    worker.initialize()
+    assert worker.tick()['outcome'] == 'new_story'
+    assert worker.store.classification(item.id)['category'] == 'computing'
+    with storage.transaction() as repo:
+        assessment = repo.story_assessments(revision_id=rev.id)[0]
+        observation = repo.latest_for_item(SourceObservation, item.id)
+    assert assessment.category == 'computing'
+    candidate = TopicCandidate(item_id=item.id, observation_id=observation.id,
+        first_seen_at=observation.observed_at, title=item.title, excerpt=rev.markdown, channel='test')
+    # Topic settings require two members, so use a second independent candidate.
+    second = CurationService(storage).add(Item(kind='paper', title='Other paper'))
+    second_rev = CurationService(storage).add(ContentRevision.from_markdown(item_id=second.id, markdown=rev.markdown))
+    observe(storage, second)
+    assert worker.tick()['status'] == 'succeeded'  # Curate the first story.
+    assert worker.tick()['outcome'] == 'new_story'
+    with storage.transaction() as repo:
+        second_observation = repo.latest_for_item(SourceObservation, second.id)
+    other = TopicCandidate(item_id=second.id, observation_id=second_observation.id,
+        first_seen_at=second_observation.observed_at, title=second.title, excerpt=second_rev.markdown, channel='test')
+    proposals = AssistantTopicCurator(worker.store).propose([candidate, other], TopicSettings())
+    assert len(proposals) == 1 and proposals[0].key == 'assistant:computing'
+    assert {a.item_id for a in proposals[0].assignments} == {item.id, second.id}
