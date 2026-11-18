@@ -340,13 +340,13 @@ def test_paper_work_precedes_article_in_publication(tmp_path):
     assert job['revision_id'] == str(rev.id)
 
 
-def test_story_assessment_uses_decision_model(tmp_path, monkeypatch):
+def test_story_assessment_uses_reasoning_model(tmp_path, monkeypatch):
     from paperflow_assistant.stories import AssessmentDecision
     settings, storage, item, rev, output = fixture(tmp_path)
     observe(storage, item)
     monkeypatch.setattr('paperflow_story_vectors.semantic_candidates', lambda *args, **kwargs: [])
-    cheap_model = object()
-    monkeypatch.setattr('paperflow_assistant.runtime.provider_models', lambda settings: (object(), cheap_model))
+    reasoning_model = object()
+    monkeypatch.setattr('paperflow_assistant.runtime.provider_models', lambda settings: (reasoning_model, object()))
     seen = []
     async def assess(context, source, candidates, model):
         seen.append(model)
@@ -355,4 +355,4 @@ def test_story_assessment_uses_decision_model(tmp_path, monkeypatch):
     worker = AssistantWorker(settings, runner=runner(output))
     worker.initialize()
     assert worker.tick()['outcome'] == 'new_story'
-    assert seen == [cheap_model]
+    assert seen == [reasoning_model]
