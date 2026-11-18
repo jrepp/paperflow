@@ -29,6 +29,9 @@ without skips or expected failures. `scripts/check code` runs the backend gate w
 | reader-acceptance::AC-9 | reader-acceptance::FR-9 | covered | tests/test_assistant.py::test_request_ledger_preserves_failures_retries_and_spend | — | Mixed request outcomes, retry costs, unknown usage, and incomplete projections. |
 | reader-acceptance::AC-10 | reader-acceptance::FR-10 | covered | tests/test_assistant.py::test_quality_intervals_and_empty_samples | curation-monitor.spec.js::curation monitor distinguishes volume from sampled estimated quality | Empty estimates and small-sample intervals; browser checks model-estimate labels and sample coverage. |
 | reader-acceptance::AC-11 | reader-acceptance::FR-11 | covered | tests/test_assistant.py::test_bad_citations_and_evidence_basis_do_not_complete_jobs | — | Fabricated quotes and incorrect evidence basis cannot complete a job. |
+| reader-acceptance::AC-12 | reader-acceptance::FR-12 | covered | tests/test_story_worker.py::test_worker_routes_repeat_without_curation | — | Two observed sources share one story and a repeat does not run curation. |
+| reader-acceptance::AC-13 | reader-acceptance::FR-13 | covered | tests/test_story_worker.py::test_material_updates_coalesce_and_include_prior_evidence | — | Worker combines pending contributions with both source revisions. |
+| reader-acceptance::AC-14 | reader-acceptance::FR-14 | covered | tests/test_publish_site.py::test_story_eligibility_window_privacy_counts_and_links | — | SQLite publication checks source eligibility, privacy, counts, limits and stable links. |
 <!-- acceptance-coverage:end -->
 
 Covered means an executable test exists; only a successful run establishes a passing result.

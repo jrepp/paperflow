@@ -90,6 +90,8 @@ class Context:
     usage: RunUsage
     decisions: dict = field(default_factory=dict)
     supplied_passages: dict = field(default_factory=dict)
+    story_context: dict | None = None
+    public_analysis: bool = False
     failure: dict | None = None
     failure_exception: Exception | None = None
 
@@ -139,7 +141,11 @@ def attach_tools(agent, *, public_analysis=False):
     @guard
     def search_history(ctx: RunContext[Context], query: str, after: str | None = None, before: str | None = None) -> list[dict]:
         """Search indexed source text. Dates are ISO strings. Return exact passage offsets."""
-        return ctx.deps.store.search_history(query, limit=3, after=after, before=before)
+        results = ctx.deps.store.search_history(query, limit=3, after=after, before=before)
+        if ctx.deps.public_analysis:
+            with ctx.deps.storage.transaction() as repo:
+                results = [row for row in results if repo.is_public_revision(row['revision_id'])]
+        return results
 
     @register
     @guard
@@ -147,6 +153,8 @@ def attach_tools(agent, *, public_analysis=False):
         """Read a source passage using Unicode offsets. Paginate long documents."""
         with ctx.deps.storage.transaction() as repo:
             revision = repo.get(ContentRevision, revision_id)
+            if ctx.deps.public_analysis and not repo.is_public_revision(revision_id):
+                raise ModelRetry('Unknown revision or invalid passage range')
         if not revision or start < 0 or not 1 <= length <= 20000:
             raise ModelRetry('Unknown revision or invalid passage range')
         return revision_passage(ctx.deps, revision, start, length)
@@ -222,6 +230,10 @@ def attach_tools(agent, *, public_analysis=False):
                 'attempt': deps.job['attempts'], 'limit': 'decision_depth',
                 'configured_limit': deps.settings.decision_depth, 'observed': depth}))
             raise ModelRetry('Decision depth budget exhausted')
+        if deps.public_analysis:
+            with deps.storage.transaction() as repo:
+                if any(not repo.is_public_revision(c.revision_id) for c in request.citations):
+                    raise ModelRetry('Public decisions cannot cite private revisions')
         validate_citations(request.citations, deps.storage)
         try:
             result = await deps.decision_agent.run(json.dumps({'question': request.model_dump(mode='json'),
@@ -330,12 +342,12 @@ async def run_agent(context, item, reasoner, decision):
         model_settings={'extra_body': {'thinking': {'type': 'enabled'}},
                         'openai_reasoning_effort': 'high', 'max_tokens': settings.max_output_tokens,
                         'timeout': 90, 'max_retries': 0, 'parallel_tool_calls': False}, retries=2)
-    attach_tools(agent, public_analysis=context.revision.processor_version == "public-content-v1")
+    attach_tools(agent, public_analysis=context.public_analysis or context.revision.processor_version == "public-content-v1")
 
     @agent.output_validator
     def validate(ctx: RunContext[Context], output: Analysis) -> Analysis:
         try:
-            validate_analysis(output, ctx.deps.revision, settings, ctx.deps.storage)
+            validate_analysis(output, ctx.deps.revision, settings, ctx.deps.storage, public_only=ctx.deps.public_analysis)
         except ValueError as exc:
             logger.warning(json.dumps({'event': 'curation.validation.failed', 'run_id': ctx.deps.job['id'],
                                        'reason': str(exc)}))
@@ -351,9 +363,14 @@ async def run_agent(context, item, reasoner, decision):
               'source_included_range': [0, included], 'source_truncated': included < len(rev.markdown),
               'budget': budget_snapshot(settings),
               'source_total_characters': len(rev.markdown), 'categories': settings.categories,
-              'relevant_insights': context.store.search_memory(item['title'], 'insight', 5),
-              'open_follow_ups': context.store.search_memory(item['title'], 'follow_up', 5),
-              'run_id': context.job['id'], 'decision_depth_limit': settings.decision_depth}
+              'relevant_insights': [] if context.public_analysis else context.store.search_memory(item['title'], 'insight', 5),
+              'open_follow_ups': [] if context.public_analysis else context.store.search_memory(item['title'], 'follow_up', 5),
+              'run_id': context.job['id'], 'decision_depth_limit': settings.decision_depth,
+              'story_context': context.story_context}
+    if context.story_context:
+        prompt['task'] += (' Update the story account using the prior account and all supplied source evidence, '
+            'including each pending material contribution. Preserve still-supported findings and cite exact '
+            'revision-bound passages for both prior and incoming evidence. Note uncertainty and corrections.')
     async with agent, context.decision_agent:
         result = await agent.run(json.dumps(prompt), deps=context, usage=context.usage,
                                  usage_limits=limits(settings), timeout=settings.timeout_seconds)
@@ -396,13 +413,14 @@ async def run_agent(context, item, reasoner, decision):
 
 
 class AssistantWorker:
-    def __init__(self, settings, *, runner=None):
+    def __init__(self, settings, *, runner=None, assessment_runner=None):
         self.settings = settings.assistant
         self.storage = SQLiteResearchStorage(settings.storage)
         if self.settings.path.resolve() == settings.storage.path.resolve():
             raise ValueError('Assistant memory must use a separate private database')
         self.store = AssistantStore(self.settings.path)
         self.runner = runner
+        self.assessment_runner = assessment_runner
 
     def initialize(self):
         self.store.initialize()
@@ -420,12 +438,13 @@ class AssistantWorker:
                 item = repo.get(Item, item_id)
                 revision = repo.latest_for_item(ContentRevision, item_id)
                 observation = repo.latest_for_item(SourceObservation, item_id)
-                candidates.append((item, revision, observation))
+                trusted = bool(revision and repo.is_public_revision(revision.id))
+                candidates.append((item, revision, observation, trusted))
         fetched = False
         priority = []
-        for item, revision, observation in candidates:
+        for item, revision, observation, trusted in candidates:
             if (not fetched and item.kind in ('paper', 'article', 'discussion')
-                    and (revision is None or (revision.evidence_basis != 'full_text'
+                    and (not trusted or revision is None or (revision.evidence_basis != 'full_text'
                          and revision.processor_version != 'public-content-v1'))
                     and self.store.reserve_content_fetch(item.id, self.settings.daily_attempt_limit)):
                 url = str(observation.entry.url if observation else item.canonical_url or '')
@@ -433,12 +452,16 @@ class AssistantWorker:
                     fetched = True
                     try:
                         enriched = source_revision(item, url)
-                        if revision is None or len(enriched.markdown) > len(revision.markdown):
+                        if not trusted or revision is None or len(enriched.markdown) > len(revision.markdown):
                             with self.storage.transaction(write=True) as repo:
-                                revision = repo.add(enriched)
+                                existing = repo._conn.execute("SELECT id FROM research_revisions WHERE item_id=? AND content_hash=? AND processor_version=? AND evidence_basis=?",
+                                    (str(enriched.item_id), enriched.content_hash, enriched.processor_version, enriched.evidence_basis)).fetchone()
+                                revision = repo.get(ContentRevision, UUID(existing[0])) if existing else repo.add(enriched)
+                                repo.mark_public_revision(revision.id)
+                                trusted = True
                     except (OSError, ValueError):
                         logger.info(json.dumps({'event': 'curation.content.unavailable', 'item_id': str(item.id)}))
-            if revision:
+            if revision and trusted:
                 priority.append(str(revision.id))
         return priority
 
@@ -460,6 +483,128 @@ class AssistantWorker:
             revision, item = self.store.document(job['revision_id'])
             context = Context(job, ContentRevision.model_validate(revision), self.storage, self.store,
                               self.settings, None, RunUsage())
+            with self.storage.transaction() as repo:
+                context.public_analysis = repo.is_public_revision(context.revision.id)
+            from paperflow_assistant.stories import (RULE_VERSION, AssessmentDecision, assess,
+                                                    validate_decision, account_markdown)
+            from paperflow_story_models import Story, StoryAssessment, StoryFinding
+            if self.store.story_job(job['id']):
+                from paperflow_story_vectors import semantic_candidates
+                with self.storage.transaction() as repo:
+                    documents = [(story_id, text) for story_id, text in repo.story_documents()
+                                 if all(repo.is_public_revision(a.revision_id) for a in repo.story_assessments(story_id=UUID(story_id)))]
+                semantic = semantic_candidates(item['title'] + '\n' + context.revision.markdown[:4000],
+                    documents, index_path=self.settings.path.with_suffix('.stories.mv2'))
+                with self.storage.transaction() as repo:
+                    candidates = []
+                    for candidate in repo.story_candidates(context.revision.id, semantic_ids=semantic):
+                        if any(not repo.is_public_revision(a.revision_id) for a in repo.story_assessments(story_id=candidate.story.id)):
+                            continue
+                        story_data = candidate.story.model_dump(mode='json')
+                        story_data['title'] = story_data['title'][:300]
+                        story_data['account'] = story_data['account'][:1000]
+                        data = {'story': story_data, 'matched': list(candidate.matched),
+                                'score': candidate.score, 'evidence': []}
+                        # Keep the cheap assessment bounded even for stories with many sources.
+                        for source in candidate.sources[:1]:
+                            source_revision = repo.get(ContentRevision, source.revision_id)
+                            if source_revision:
+                                data['evidence'].append({'revision_id': str(source_revision.id),
+                                    'evidence_basis': source_revision.evidence_basis,
+                                    'text': source_revision.markdown[:2000]})
+                        candidates.append(data)
+                    prior = [a for a in repo.story_assessments(revision_id=context.revision.id)
+                             if a.processor_version == fingerprint(self.settings) and a.rule_set_version == RULE_VERSION]
+                if prior:
+                    assessment = prior[-1]
+                else:
+                    if self.assessment_runner:
+                        decision = AssessmentDecision.model_validate(self.assessment_runner(context, item, candidates))
+                    else:
+                        reasoner, _ = provider_models(self.settings)
+                        decision = asyncio.run(assess(context, item, candidates, reasoner))
+                    selected_hint = next((c for c in candidates if str(c['story']['id']) == str(decision.story_id)), None)
+                    same_origin = selected_hint and any(x in ('item', 'canonical_url') for x in selected_hint['matched'])
+                    if (decision.outcome != 'unresolved' and len(context.revision.markdown.split()) < 10
+                            and not (decision.outcome == 'repeated_coverage' and same_origin)):
+                        decision = AssessmentDecision.model_validate({'outcome': 'unresolved', 'story_id': decision.story_id,
+                            'findings': [{'rule_id': 'insufficient-text', 'result': 'unresolved',
+                                'rationale': 'The source text is too short to establish its contribution.',
+                                'missing_evidence': 'A fuller source revision is needed.'}]})
+                    try:
+                        selected = validate_decision(decision, context.revision, candidates)
+                    except ValueError as exc:
+                        logger.warning(json.dumps({'event': 'story.assessment.validation_failed',
+                            'run_id': job['id'], 'reason': str(exc)}))
+                        raise
+                    findings = tuple(StoryFinding(rule_id=f.rule_id, rule_version=RULE_VERSION,
+                        result=f.result, rationale=f.rationale, passages=tuple(f.passages),
+                        missing_evidence=f.missing_evidence) for f in decision.findings)
+                    assessment = StoryAssessment(revision_id=context.revision.id,
+                        story_id=decision.story_id, story_version=selected['story']['version'] if selected else None,
+                        outcome=decision.outcome, findings=findings, evidence_basis=context.revision.evidence_basis,
+                        creator=self.settings.reasoning_model, creator_kind='processor',
+                        processor_version=fingerprint(self.settings), rule_set_version=RULE_VERSION,
+                        processing_run_id=uuid5(NAMESPACE_URL, job['id']))
+                    with self.storage.transaction(write=True) as repo:
+                        assessment = repo.apply_story_assessment(assessment,
+                            story=Story(title=item['title']) if decision.outcome == 'new_story' else None)
+                # Existing successful source analyses can seed a new story without another model run.
+                already_published = False
+                if assessment.outcome == 'new_story':
+                    existing = self.store.analysis(item['id'])
+                    if existing and existing['revision_id'] == str(context.revision.id):
+                        existing_analysis = Analysis.model_validate(existing['analysis'])
+                        try:
+                            validate_analysis(existing_analysis, context.revision, self.settings, self.storage, public_only=True)
+                        except ValueError:
+                            existing = None
+                    if existing and existing['revision_id'] == str(context.revision.id):
+                        with self.storage.transaction(write=True) as repo:
+                            story = repo.get_story(assessment.story_id)
+                            pending = repo.story_pending(story.id)
+                            if len(pending) == 1 and pending[0].id == assessment.id:
+                                repo.publish_story(story.id, story.version, story.title,
+                                    account_markdown(Analysis.model_validate(existing['analysis'])), [assessment.id],
+                                    source_assessment_ids=[x.assessment_id for x in repo.story_sources(story.id)])
+                            already_published = bool(story.account) or len(pending) == 1 and pending[0].id == assessment.id
+                self.store.finish_story_job(job, assessment, usage_snapshot(context.usage), time.monotonic()-start,
+                                            already_published=already_published)
+                return {'id': job['id'], 'status': 'succeeded', 'stage': 'assessment',
+                        'outcome': assessment.outcome, 'attempt': job['attempts']}
+            route = self.store.story_for_revision(context.revision.id, job['fingerprint'])
+            if route and route['story_id']:
+                with self.storage.transaction() as repo:
+                    story = repo.get_story(UUID(route['story_id']))
+                    pending = repo.story_pending(story.id)
+                    if any(not repo.is_public_revision(a.revision_id) for a in repo.story_assessments(story_id=story.id)):
+                        raise ValueError('Story contains a revision without public provenance')
+                    sources = []
+                    for source in repo.story_sources(story.id):
+                        evidence = repo.get(ContentRevision, source.revision_id)
+                        if evidence:
+                            sources.append({'revision_id': str(evidence.id), 'evidence_basis': evidence.evidence_basis,
+                                            'text': evidence.markdown[:self.settings.source_character_limit]})
+                    included_ids = {entry['revision_id'] for entry in sources}
+                    for contribution in pending:
+                        if str(contribution.revision_id) not in included_ids:
+                            evidence = repo.get(ContentRevision, contribution.revision_id)
+                            if evidence:
+                                sources.append({'revision_id': str(evidence.id), 'evidence_basis': evidence.evidence_basis,
+                                                'text': evidence.markdown[:self.settings.source_character_limit]})
+                    context.story_context = {'story': story.model_dump(mode='json'),
+                        'pending': [x.model_dump(mode='json') for x in pending], 'sources': sources,
+                        'source_assessment_ids': [str(x.assessment_id) for x in repo.story_sources(story.id)]}
+            staged = self.store.staged_publication(job['id'])
+            if staged and context.story_context and not context.story_context['pending']:
+                with self.storage.transaction() as repo:
+                    versions = repo._conn.execute('SELECT assessment_ids FROM research_story_versions WHERE story_id=?',
+                        (context.story_context['story']['id'],)).fetchall()
+                    published = any(set(staged['assessment_ids']).issubset(set(json.loads(row[0]))) for row in versions)
+                if published:
+                    self.store.finish(job['id'], staged['analysis'], staged['validation'], staged['evaluation'],
+                                      staged['usage'], time.monotonic()-start)
+                    return {'id': job['id'], 'status': 'succeeded', 'attempt': job['attempts']}
             if self.runner:
                 output = self.runner(context, item)
             else:
@@ -467,7 +612,16 @@ class AssistantWorker:
                 output = asyncio.run(run_agent(context, item, reasoner, decision))
             # Injected runners obey the same validation boundary as live models.
             analysis = Analysis.model_validate(output[0])
-            validation = validate_analysis(analysis, context.revision, self.settings, self.storage)
+            validation = validate_analysis(analysis, context.revision, self.settings, self.storage, public_only=context.public_analysis)
+            if context.story_context:
+                story = context.story_context['story']
+                self.store.stage_publication(job['id'], {'analysis': analysis.model_dump(mode='json'),
+                    'validation': validation, 'evaluation': output[2], 'usage': output[3],
+                    'assessment_ids': [x['id'] for x in context.story_context['pending']]})
+                with self.storage.transaction(write=True) as repo:
+                    repo.publish_story(UUID(story['id']), story['version'], story['title'],
+                        account_markdown(analysis), [x['id'] for x in context.story_context['pending']],
+                        source_assessment_ids=context.story_context['source_assessment_ids'])
             self.store.finish(job['id'], analysis.model_dump(mode='json'), validation,
                               output[2], output[3], time.monotonic()-start)
             logger.info(json.dumps({'event': 'curation.attempt.finished', 'run_id': job['id'],

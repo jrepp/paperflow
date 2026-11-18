@@ -23,6 +23,9 @@ dependencies = [
   "typer>=0.24.1",
   "websockets>=16.0",
   "pydantic-ai-slim[openai,typesafe]>=2.69.0,<3",
+  "model2vec>=0.10,<0.11",
+  "memvid-sdk==2.0.160",
+  "markdown-it-py>=4,<5",
 ]
 
 [project.optional-dependencies]
@@ -60,6 +63,9 @@ py-modules = [
   "paperflow_ingestion",
   "paperflow_domain",
   "paperflow_settings",
+  "paperflow_story_vectors",
+  "paperflow_story_models",
+  "paperflow_story_storage",
   "paperflow_topic_models",
   "paperflow_topics",
   "paperflow_topic_api",

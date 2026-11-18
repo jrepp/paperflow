@@ -109,3 +109,35 @@ Requirement: FR-11
 Given a source revision, when a model invents a quotation or claims full-text
 access for an abstract, then validation rejects the analysis and does not mark
 the job completed. Exact quotation checks do not establish semantic accuracy.
+
+## FR-12: Group repeated coverage into a durable story
+
+### AC-12: Preserve the account for repeated coverage
+
+Requirement: FR-12
+
+Given an observed source and an existing story about the same finding, when the
+worker assesses it as repeated coverage, then it attaches the source without
+running another curation or creating another story.
+
+## FR-13: Curate material story contributions together
+
+### AC-13: Combine outstanding material evidence
+
+Requirement: FR-13
+
+Given a new story and a material contribution awaiting curation, when the worker
+runs, then it supplies both assessed revisions and combines pending decisions
+into one published story account.
+
+## FR-14: Publish eligible, source-grounded stories
+
+### AC-14: Preserve publication boundaries and public sources
+
+Requirement: FR-14
+
+Given a public feed with a story, a later public repeat, older public context,
+and private manual sources, when the static site is built, then the story shows
+its public account and sources while private inputs and analyses remain absent.
+The feed respects its window and per-channel limit and retains item counts and
+links for existing consumers.

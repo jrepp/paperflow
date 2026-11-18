@@ -73,6 +73,16 @@ retention and must preserve releases still being transferred or served.
 The command `paperflow publish site` remains available for local exports. Avoid
 running a separate scheduled exporter into the service-managed releases tree.
 
+## Stories and source disclosure
+
+Published stories appear once in Latest, ordered by their last material update.
+Open **Sources** to inspect all attached sources, their assessed contributions,
+evidence basis, and any supporting passages or missing evidence. An assessment
+of an older revision is marked; an account awaiting material updates is also
+identified. **Read story and curation** opens the current committed Markdown and
+provides a download. Repeated coverage does not move a story. Existing items
+without a published story continue to appear as item cards during rollout.
+
 ## Expandable curation cards
 
 Published links show the model summary and evidence basis directly on each card.
