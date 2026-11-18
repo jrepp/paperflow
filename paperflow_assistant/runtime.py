@@ -38,6 +38,15 @@ TASK = ('Analyze this single source revision and return the Analysis output. '
         'Historical search and memory are context, not additional items to curate. '
         'Do not create buckets, claims, or reviews unless needed for an existing research collection. '
         'Record concise internal follow-ups or insights only when they add durable value. '
+        'The supplied source_text is extracted evidence starting at offset zero. Read it directly. '
+        'Cite short, unique, exact quotes. Use start=0 when an offset is unknown; the harness resolves unique exact matches. '
+        'Do not call read_revision for passages already supplied in source_text or earlier tool results. '
+        'Relevant memory and follow-ups are already supplied. Do not repeat those searches without a specific gap. '
+        'Use at most one historical search for this single-source analysis. '
+        'For source text beyond the supplied range, read only passages needed for the central findings. '
+        'State coverage limits instead of exhausting the budget to read every passage. '
+        'For public-content revisions, this is read-only analysis: do not write memory or modify collections. '
+        'Prefer one bounded decision check, then return the analysis. '
         'Do not repeat successful tool calls. Finish within the supplied budget.')
 PROMPT_VERSION = hashlib.sha256((PROMPT + TASK).encode()).hexdigest()
 COMMAND_TYPES = {'create_bucket': ResearchBucket, 'annotate': Annotate, 'add_claim': AddClaim,
@@ -80,11 +89,32 @@ class Context:
     decision_agent: object
     usage: RunUsage
     decisions: dict = field(default_factory=dict)
+    supplied_passages: dict = field(default_factory=dict)
     failure: dict | None = None
     failure_exception: Exception | None = None
 
 
-def attach_tools(agent):
+def revision_passage(context, revision, start, length):
+    """Avoid resending immutable evidence already in this run's model context."""
+    end = min(len(revision.markdown), start + length)
+    key = str(revision.id)
+    ranges = context.supplied_passages.setdefault(key, [])
+    metadata = {'revision_id': key, 'evidence_basis': revision.evidence_basis,
+                'start': start, 'total_characters': len(revision.markdown)}
+    if any(left <= start and end <= right for left, right in ranges):
+        return {**metadata, 'already_supplied': True, 'end': end,
+                'instruction': 'Use the exact passage already supplied in source_text or an earlier read_revision result.'}
+    text = revision.markdown[start:end]
+    ranges.append((start, end))
+    return {**metadata, 'text': text}
+
+
+def attach_tools(agent, *, public_analysis=False):
+    def register(function):
+        if public_analysis and function.__name__ not in {'search_history', 'read_revision', 'evaluate_decisions'}:
+            return function
+        return agent.tool(function)
+
     def guard(function):
         @functools.wraps(function)
         async def call(ctx, *args, **kwargs):
@@ -105,13 +135,13 @@ def attach_tools(agent):
                 raise
         return call
 
-    @agent.tool
+    @register
     @guard
     def search_history(ctx: RunContext[Context], query: str, after: str | None = None, before: str | None = None) -> list[dict]:
         """Search indexed source text. Dates are ISO strings. Return exact passage offsets."""
-        return ctx.deps.store.search_history(query, after=after, before=before)
+        return ctx.deps.store.search_history(query, limit=3, after=after, before=before)
 
-    @agent.tool
+    @register
     @guard
     def read_revision(ctx: RunContext[Context], revision_id: UUID, start: int = 0, length: int = 12000) -> dict:
         """Read a source passage using Unicode offsets. Paginate long documents."""
@@ -119,16 +149,15 @@ def attach_tools(agent):
             revision = repo.get(ContentRevision, revision_id)
         if not revision or start < 0 or not 1 <= length <= 20000:
             raise ModelRetry('Unknown revision or invalid passage range')
-        return {'revision_id': str(revision.id), 'evidence_basis': revision.evidence_basis,
-                'start': start, 'total_characters': len(revision.markdown), 'text': revision.markdown[start:start+length]}
+        return revision_passage(ctx.deps, revision, start, length)
 
-    @agent.tool
+    @register
     @guard
     def search_research_insights(ctx: RunContext[Context], query: str) -> list[dict]:
         """Retrieve internal research memory. Reassess it against source evidence."""
         return ctx.deps.store.search_memory(query, 'insight')
 
-    @agent.tool
+    @register
     @guard
     def list_follow_ups(ctx: RunContext[Context], query: str = '') -> list[dict]:
         """Find open internal research tasks relevant to this run."""
@@ -141,7 +170,7 @@ def attach_tools(agent):
         return ctx.deps.store.memory_write(ctx.deps.job['id'], key, memory.model_dump(mode='json'),
             ctx.deps.settings.reasoning_model, record_id=record_id, expected_version=expected_version, status=status)
 
-    @agent.tool
+    @register
     @guard
     def record_research_insight(ctx: RunContext[Context], key: str, memory: MemoryInput) -> dict:
         """Store a cited internal insight for later runs. Reuse the key only for an exact retry."""
@@ -149,7 +178,7 @@ def attach_tools(agent):
             raise ModelRetry('Use insight kind')
         return save_memory(ctx, key, memory)
 
-    @agent.tool
+    @register
     @guard
     def add_follow_up(ctx: RunContext[Context], key: str, memory: MemoryInput) -> dict:
         """Record an internal research task with a reason and a reassessment trigger."""
@@ -157,7 +186,7 @@ def attach_tools(agent):
             raise ModelRetry('Use follow_up kind and task basis')
         return save_memory(ctx, key, memory)
 
-    @agent.tool
+    @register
     @guard
     def revise_research_insight(ctx: RunContext[Context], key: str, record_id: UUID, expected_version: int,
                                memory: MemoryInput, status: str) -> dict:
@@ -166,7 +195,7 @@ def attach_tools(agent):
             raise ModelRetry('Use insight kind')
         return save_memory(ctx, key, memory, str(record_id), expected_version, status)
 
-    @agent.tool
+    @register
     @guard
     def resolve_follow_up(ctx: RunContext[Context], key: str, record_id: UUID, expected_version: int,
                           memory: MemoryInput, status: str) -> dict:
@@ -175,7 +204,7 @@ def attach_tools(agent):
             raise ModelRetry('Use follow_up kind and resolved or dismissed status')
         return save_memory(ctx, key, memory, str(record_id), expected_version, status)
 
-    @agent.tool
+    @register
     @guard
     async def evaluate_decisions(ctx: RunContext[Context], request: DecisionRequest) -> dict:
         """Ask Jev one bounded question. Parent IDs express dependencies for N-layer decisions."""
@@ -209,13 +238,13 @@ def attach_tools(agent):
         deps.store.record_decision(deps.job['id'], decision_id, record)
         return record
 
-    @agent.tool
+    @register
     @guard
     def list_research_buckets(ctx: RunContext[Context]) -> list[dict]:
         """List research collections available to curation commands."""
         return [b.model_dump(mode='json') for b in CurationService(ctx.deps.storage).buckets()]
 
-    @agent.tool
+    @register
     @guard
     def curation_schema(ctx: RunContext[Context], operation: str) -> dict:
         """Get the exact payload schema before a curation command. Authorship comes from the harness."""
@@ -226,7 +255,7 @@ def attach_tools(agent):
         schema['required'] = [name for name in schema.get('required', []) if name not in supplied]
         return schema
 
-    @agent.tool
+    @register
     @guard
     def read_curation(ctx: RunContext[Context], kind: str, record_id: UUID) -> dict:
         """Read an item, bucket, or claim with its research context and review history."""
@@ -234,7 +263,7 @@ def attach_tools(agent):
             raise ModelRetry('Kind must be item, bucket, or claim')
         return getattr(CurationService(ctx.deps.storage), kind)(record_id).model_dump(mode='json')
 
-    @agent.tool
+    @register
     @guard
     def curate(ctx: RunContext[Context], key: str, operation: str, target_id: UUID | None, payload: dict) -> dict:
         """Validated domain command. Operations: create_bucket, annotate, add_claim, add_evidence,
@@ -301,20 +330,26 @@ async def run_agent(context, item, reasoner, decision):
         model_settings={'extra_body': {'thinking': {'type': 'enabled'}},
                         'openai_reasoning_effort': 'high', 'max_tokens': settings.max_output_tokens,
                         'timeout': 90, 'max_retries': 0, 'parallel_tool_calls': False}, retries=2)
-    attach_tools(agent)
+    attach_tools(agent, public_analysis=context.revision.processor_version == "public-content-v1")
 
     @agent.output_validator
     def validate(ctx: RunContext[Context], output: Analysis) -> Analysis:
         try:
             validate_analysis(output, ctx.deps.revision, settings, ctx.deps.storage)
         except ValueError as exc:
+            logger.warning(json.dumps({'event': 'curation.validation.failed', 'run_id': ctx.deps.job['id'],
+                                       'reason': str(exc)}))
             raise ModelRetry(str(exc)) from None
         return output
 
     rev = context.revision
+    included = min(len(rev.markdown), settings.source_character_limit)
+    context.supplied_passages[str(rev.id)] = [(0, included)]
     prompt = {'task': TASK,
               'item': item, 'revision_id': str(rev.id), 'evidence_basis': rev.evidence_basis,
-              'source_text': rev.markdown[:settings.source_character_limit],
+              'source_text': rev.markdown[:included],
+              'source_included_range': [0, included], 'source_truncated': included < len(rev.markdown),
+              'budget': budget_snapshot(settings),
               'source_total_characters': len(rev.markdown), 'categories': settings.categories,
               'relevant_insights': context.store.search_memory(item['title'], 'insight', 5),
               'open_follow_ups': context.store.search_memory(item['title'], 'follow_up', 5),
@@ -414,7 +449,7 @@ class AssistantWorker:
         for _ in range(50):
             if self.store.reconcile(self.storage, fingerprint(self.settings)) < 200:
                 break
-        job = self.store.claim(self.settings.max_attempts, self.settings.daily_attempt_limit, priority)
+        job = self.store.claim(self.settings.max_attempts, self.settings.daily_attempt_limit, priority, fingerprint(self.settings))
         if job is None:
             return None
         start = time.monotonic()
