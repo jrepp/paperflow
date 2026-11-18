@@ -38,6 +38,13 @@ TASK = ('Analyze this single source revision and return the Analysis output. '
         'Historical search and memory are context, not additional items to curate. '
         'Do not create buckets, claims, or reviews unless needed for an existing research collection. '
         'Record concise internal follow-ups or insights only when they add durable value. '
+        'The supplied source_text is extracted evidence starting at offset zero. Read it directly. '
+        'Do not call read_revision for passages already supplied in source_text or earlier tool results. '
+        'Relevant memory and follow-ups are already supplied. Do not repeat those searches without a specific gap. '
+        'Use at most one historical search for this single-source analysis. '
+        'For source text beyond the supplied range, read only passages needed for the central findings. '
+        'State coverage limits instead of exhausting the budget to read every passage. '
+        'Prefer one bounded decision check, then return the analysis. '
         'Do not repeat successful tool calls. Finish within the supplied budget.')
 PROMPT_VERSION = hashlib.sha256((PROMPT + TASK).encode()).hexdigest()
 COMMAND_TYPES = {'create_bucket': ResearchBucket, 'annotate': Annotate, 'add_claim': AddClaim,
@@ -80,8 +87,24 @@ class Context:
     decision_agent: object
     usage: RunUsage
     decisions: dict = field(default_factory=dict)
+    supplied_passages: dict = field(default_factory=dict)
     failure: dict | None = None
     failure_exception: Exception | None = None
+
+
+def revision_passage(context, revision, start, length):
+    """Avoid resending immutable evidence already in this run's model context."""
+    end = min(len(revision.markdown), start + length)
+    key = str(revision.id)
+    ranges = context.supplied_passages.setdefault(key, [])
+    metadata = {'revision_id': key, 'evidence_basis': revision.evidence_basis,
+                'start': start, 'total_characters': len(revision.markdown)}
+    if any(left <= start and end <= right for left, right in ranges):
+        return {**metadata, 'already_supplied': True, 'end': end,
+                'instruction': 'Use the exact passage already supplied in source_text or an earlier read_revision result.'}
+    text = revision.markdown[start:end]
+    ranges.append((start, end))
+    return {**metadata, 'text': text}
 
 
 def attach_tools(agent):
@@ -109,7 +132,7 @@ def attach_tools(agent):
     @guard
     def search_history(ctx: RunContext[Context], query: str, after: str | None = None, before: str | None = None) -> list[dict]:
         """Search indexed source text. Dates are ISO strings. Return exact passage offsets."""
-        return ctx.deps.store.search_history(query, after=after, before=before)
+        return ctx.deps.store.search_history(query, limit=3, after=after, before=before)
 
     @agent.tool
     @guard
@@ -119,8 +142,7 @@ def attach_tools(agent):
             revision = repo.get(ContentRevision, revision_id)
         if not revision or start < 0 or not 1 <= length <= 20000:
             raise ModelRetry('Unknown revision or invalid passage range')
-        return {'revision_id': str(revision.id), 'evidence_basis': revision.evidence_basis,
-                'start': start, 'total_characters': len(revision.markdown), 'text': revision.markdown[start:start+length]}
+        return revision_passage(ctx.deps, revision, start, length)
 
     @agent.tool
     @guard
@@ -312,9 +334,13 @@ async def run_agent(context, item, reasoner, decision):
         return output
 
     rev = context.revision
+    included = min(len(rev.markdown), settings.source_character_limit)
+    context.supplied_passages[str(rev.id)] = [(0, included)]
     prompt = {'task': TASK,
               'item': item, 'revision_id': str(rev.id), 'evidence_basis': rev.evidence_basis,
-              'source_text': rev.markdown[:settings.source_character_limit],
+              'source_text': rev.markdown[:included],
+              'source_included_range': [0, included], 'source_truncated': included < len(rev.markdown),
+              'budget': budget_snapshot(settings),
               'source_total_characters': len(rev.markdown), 'categories': settings.categories,
               'relevant_insights': context.store.search_memory(item['title'], 'insight', 5),
               'open_follow_ups': context.store.search_memory(item['title'], 'follow_up', 5),
@@ -414,7 +440,7 @@ class AssistantWorker:
         for _ in range(50):
             if self.store.reconcile(self.storage, fingerprint(self.settings)) < 200:
                 break
-        job = self.store.claim(self.settings.max_attempts, self.settings.daily_attempt_limit, priority)
+        job = self.store.claim(self.settings.max_attempts, self.settings.daily_attempt_limit, priority, fingerprint(self.settings))
         if job is None:
             return None
         start = time.monotonic()

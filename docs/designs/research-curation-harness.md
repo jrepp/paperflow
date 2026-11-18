@@ -208,6 +208,14 @@ preserves the original evidence and receives a one-day fetch cooldown. Content
 retrieval respects the daily model-attempt budget. Superseded source revisions
 are not selected for new model attempts. Static builds remain read-only and do
 not fetch content or call models. Historical search currently indexes source revisions.
+The initial source window includes up to 120,000 characters. The prompt identifies
+its exact range and supplies the run budget. Repeated reads of an already supplied
+passage return a reference to that context instead of duplicating its text.
+Historical search returns at most three passages per call, and the task asks for
+one targeted search and decision check before finishing. Longer sources require
+explicit coverage limits and targeted additional reads. The per-response output
+allowance is 32,000 tokens; the cumulative 200,000-token cap is unchanged.
+
 Semantic search and a cross-record index of claims and summaries remain future work.
 
 ## Curator system prompt
