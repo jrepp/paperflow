@@ -260,3 +260,32 @@ button,.control,nav a,.brand { max-width:100%; overflow-wrap:anywhere; white-spa
 .rating-privacy summary { cursor:pointer; min-height:44px; display:flex; align-items:center; width:fit-content; color:var(--accent); text-decoration:underline; }
 .rating-privacy p { margin:.25rem 0 .75rem; }
 .rating-receipt:not([hidden]) { width:fit-content; margin:.55rem 0 0; padding:.25rem .55rem; border-inline-start:3px solid var(--accent); background:var(--tint); color:var(--ink); font-size:.8rem; }
+
+/* Published index: headlines lead; details stay secondary and easy to scan. */
+.published-page .shell { width:min(100% - 2.5rem, 960px); }
+.published-page .topbar { min-height:56px; padding-block:.25rem; justify-content:space-between; }
+.published-page .topbar .rating-privacy { margin:0; }
+.published-page .topbar .rating-privacy p { max-width:40ch; }
+.published-page main { padding-block:2rem; }
+.published-page main > h1 { margin-bottom:.25rem; }
+.published-page .published-intro { margin:.3rem 0 .25rem; }
+.published-page .feed-list { margin-top:.75rem; }
+.published-page .feed-row { padding:1.4rem 0 1.15rem; }
+.published-page .feed-row h2 { margin:0 0 .35rem; max-width:62ch; font-size:1.4rem; line-height:1.36; text-wrap:pretty; overflow-wrap:break-word; }
+.published-page .item-meta { margin-bottom:.5rem; }
+.published-page .model-summary h3 { color:var(--muted); font:600 .75rem/1.4 system-ui,sans-serif; margin:.7rem 0 .2rem; }
+.published-page .model-summary p { line-height:1.6; }
+.published-page .curation-card { margin-top:.35rem; }
+.published-page .curation-card > summary { justify-content:flex-start; gap:.6rem; padding:.35rem 0; border:0; border-radius:0; font-size:.85rem; font-weight:600; }
+.published-page .curation-card > summary::before { content:none; }
+.published-page .curation-card > summary::after { content:''; width:.45rem; height:.45rem; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(45deg) translateY(-.1rem); margin-left:.1rem; }
+.published-page .curation-card[open] > summary::after { transform:rotate(225deg) translateY(-.1rem); }
+.published-page .curation-card > summary:hover { background:transparent; text-decoration:underline; }
+.published-page .card-count { font-size:.8rem; }
+.published-page .curation-body { background:transparent; border:0; border-left:2px solid var(--line); border-radius:0; padding:0 0 0 1rem; margin:.35rem 0 1rem; }
+@media(max-width:600px) {
+  .published-page .shell { width:calc(100% - 2rem); }
+  .published-page .feed-row h2 { font-size:1.25rem; line-height:1.38; }
+  .published-page .feed-row { padding-block:1.2rem 1rem; }
+  .published-page main { padding-block:1.5rem; }
+}

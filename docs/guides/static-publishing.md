@@ -86,13 +86,13 @@ without a published story continue to appear as item cards during rollout.
 ## Expandable curation cards
 
 Published links show the model summary and evidence basis directly on each card.
-Open the disclosure labeled with the available sources, findings or details
-with a click or keyboard to inspect source metadata, observed score and comment
+Open **Details** beneath a headline with a click or keyboard to inspect source
+metadata, observed score and comment
 counts, discussion links, and model curation when available. Missing counts remain
 absent; zero counts are displayed. Source excerpts are labeled separately from
 model summaries. Curation of an older source revision is explicitly identified.
-Items without a model analysis are labeled on the card. Selection does not wait
-for curation; a backlog, failed work, or the rolling token limit can delay it.
+Items without a model analysis say so in their expanded details. Selection does
+not wait for curation; a backlog, failed work, or the rolling token limit can delay it.
 
 When the assistant is enabled and its database exists, both CLI and API builds
 include its latest successful public analysis: summary, findings, uncertainty,
