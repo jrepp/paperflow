@@ -19,6 +19,11 @@ def encode(value):
     return json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
+def assessment_key(fingerprint, revision_id):
+    from paperflow_assistant.stories import RULE_VERSION
+    return hashlib.sha256(f'{RULE_VERSION}:{fingerprint}{revision_id}'.encode()).hexdigest()
+
+
 class AssistantStore:
     def __init__(self, path):
         self.path = Path(path)
@@ -89,9 +94,9 @@ class AssistantStore:
                              (key, doc[0], fingerprint, time.time(), time.time()))
                 if doc[0] not in public_revisions:
                     continue
-                assessment_key = hashlib.sha256(('story-assessment-v1:' + fingerprint + doc[0]).encode()).hexdigest()
-                conn.execute("INSERT OR IGNORE INTO assistant_jobs (id,revision_id,fingerprint,status,queued_at,available_at) VALUES (?,?,?,'queued',?,?)", (assessment_key, doc[0], fingerprint, time.time(), time.time()))
-                conn.execute("INSERT OR IGNORE INTO assistant_story_jobs (job_id,revision_id) VALUES (?,?)", (assessment_key, doc[0]))
+                assessment_id = assessment_key(fingerprint, doc[0])
+                conn.execute("INSERT OR IGNORE INTO assistant_jobs (id,revision_id,fingerprint,status,queued_at,available_at) VALUES (?,?,?,'queued',?,?)", (assessment_id, doc[0], fingerprint, time.time(), time.time()))
+                conn.execute("INSERT OR IGNORE INTO assistant_story_jobs (job_id,revision_id) VALUES (?,?)", (assessment_id, doc[0]))
         return len(rows)
 
     def claim(self, max_attempts, daily_attempt_limit=100, priority_revisions=(), fingerprint=None):
@@ -103,6 +108,7 @@ class AssistantStore:
                 return None
             conn.execute("UPDATE assistant_jobs SET status='failed',error='AttemptsExhausted' WHERE status='queued' AND attempts>=?", (max_attempts,))
             priority = {str(rev): rank for rank, rev in enumerate(priority_revisions)}
+            conn.create_function('current_assessment', 2, assessment_key, deterministic=True)
             conn.create_function('publication_rank', 1, lambda rev: priority.get(rev, len(priority)))
             last_stage = conn.execute("SELECT value FROM assistant_meta WHERE key='last_story_stage'").fetchone()
             prefer = 'curation' if last_stage and last_stage[0] == 'assessment' else 'assessment'
@@ -111,11 +117,13 @@ class AssistantStore:
                 JOIN assistant_documents d ON d.revision_id=j.revision_id
                 WHERE j.status='queued' AND j.available_at<=?
                 AND (? IS NULL OR j.fingerprint=?)
-                AND (EXISTS (SELECT 1 FROM assistant_story_jobs sj WHERE sj.job_id=j.id)
-                     OR NOT EXISTS (SELECT 1 FROM assistant_story_jobs sj JOIN assistant_jobs a ON a.id=sj.job_id WHERE sj.revision_id=j.revision_id AND a.fingerprint=j.fingerprint)
-                     OR EXISTS (SELECT 1 FROM assistant_story_jobs sj JOIN assistant_jobs a ON a.id=sj.job_id
-                                WHERE sj.revision_id=j.revision_id AND a.fingerprint=j.fingerprint
-                                AND a.status='succeeded' AND sj.outcome IN ('new_story','material_contribution')))
+                AND (
+                    j.id=current_assessment(j.fingerprint,j.revision_id)
+                    OR (NOT EXISTS (SELECT 1 FROM assistant_story_jobs sj WHERE sj.job_id=j.id)
+                        AND NOT EXISTS (SELECT 1 FROM assistant_story_jobs sj
+                            JOIN assistant_jobs a ON a.id=sj.job_id
+                            WHERE sj.job_id=current_assessment(j.fingerprint,j.revision_id)
+                            AND (a.status!='succeeded' OR sj.outcome NOT IN ('new_story','material_contribution')))))
                 AND (EXISTS (SELECT 1 FROM assistant_story_jobs sj WHERE sj.revision_id=j.revision_id)
                      OR NOT EXISTS (SELECT 1 FROM assistant_documents newer WHERE newer.item_id=d.item_id AND newer.rowid>d.rowid))
                 ORDER BY stage_rank(EXISTS (SELECT 1 FROM assistant_story_jobs sj WHERE sj.job_id=j.id)),
@@ -138,7 +146,7 @@ class AssistantStore:
 
     def story_for_revision(self, revision_id, fingerprint):
         with self.connection() as conn:
-            row = conn.execute("SELECT s.* FROM assistant_story_jobs s JOIN assistant_jobs j ON j.id=s.job_id WHERE s.revision_id=? AND j.fingerprint=? AND j.status='succeeded'", (str(revision_id), fingerprint)).fetchone()
+            row = conn.execute("SELECT s.* FROM assistant_story_jobs s JOIN assistant_jobs j ON j.id=s.job_id WHERE s.job_id=? AND j.status='succeeded'", (assessment_key(fingerprint, str(revision_id)),)).fetchone()
             return dict(row) if row else None
 
     def finish_story_job(self, job, assessment, usage, duration, *, already_published=False):
@@ -357,9 +365,24 @@ class AssistantStore:
                 'analysis': Analysis.model_validate_json(row['output']).model_dump(mode='json'),
                 'validation': json.loads(row['validation']), 'evaluation': json.loads(row['evaluation'])}
 
+    def analysis_for_run(self, item_id, run_id):
+        """Read a specific completed analysis without exposing internal job fields."""
+        with self.connection() as conn:
+            row = conn.execute("""SELECT j.id,j.revision_id,j.output FROM assistant_jobs j
+                JOIN assistant_documents d ON d.revision_id=j.revision_id
+                WHERE d.item_id=? AND j.id=? AND j.status='succeeded' AND j.output IS NOT NULL""",
+                (str(item_id), str(run_id))).fetchone()
+        if not row:
+            return None
+        from paperflow_assistant.models import Analysis
+        return {'run_id': row['id'], 'revision_id': row['revision_id'],
+                'analysis': Analysis.model_validate_json(row['output']).model_dump(mode='json')}
+
     def runs(self, limit=20, include_content=False):
         with self.connection() as conn:
-            rows = conn.execute('SELECT * FROM assistant_jobs ORDER BY queued_at DESC,id LIMIT ?', (min(max(limit, 1), 100),)).fetchall()
+            rows = conn.execute("""SELECT j.*, s.outcome AS story_outcome, s.assessment_id
+                FROM assistant_jobs j LEFT JOIN assistant_story_jobs s ON s.job_id=j.id
+                ORDER BY j.queued_at DESC,j.id LIMIT ?""", (min(max(limit, 1), 100),)).fetchall()
         result = []
         for row in rows:
             value = dict(row)

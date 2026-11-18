@@ -32,7 +32,8 @@ def test_worker_routes_repeat_without_curation(tmp_path, monkeypatch):
         if candidates:
             return decision('repeated_coverage', candidates[0]['story']['id'], ctx.revision.markdown)
         return decision('new_story', text=ctx.revision.markdown)
-    worker = AssistantWorker(settings, runner=runner(output), assessment_runner=assess)
+    worker = AssistantWorker(settings, runner=runner(output), assessment_runner=assess,
+        repeat_review_runner=lambda *args: {'verdict': 'all_claims_covered'})
     worker.initialize()
     assert worker.tick()['outcome'] == 'new_story'
     assert worker.tick()['status'] == 'succeeded'
@@ -178,3 +179,125 @@ def test_public_analysis_rejects_private_revision_of_observed_item(tmp_path):
     output['findings'][0]['citations'].append({'revision_id': str(private.id), 'quote': private.markdown, 'start': 0})
     with pytest.raises(ValueError, match='private revisions'):
         validate_analysis(Analysis.model_validate(output), revision, settings.assistant, storage, public_only=True)
+
+
+def test_independent_repeat_review_routes_disagreement_to_unresolved(tmp_path, monkeypatch):
+    monkeypatch.setattr('paperflow_story_vectors.semantic_candidates', lambda *args, **kwargs: [])
+    settings, storage, item, rev, output = fixture(tmp_path)
+    observe(storage, item)
+    seen = []
+    def assess(ctx, item, candidates):
+        if not candidates:
+            return decision('new_story', text=ctx.revision.markdown)
+        return decision('repeated_coverage', candidates[0]['story']['id'], ctx.revision.markdown)
+    def review(ctx, item, candidate):
+        seen.append((ctx.revision.markdown, candidate))
+        return {'verdict': 'possible_material_change'}
+    worker = AssistantWorker(settings, runner=runner(output), assessment_runner=assess, repeat_review_runner=review)
+    worker.initialize()
+    assert worker.tick()['outcome'] == 'new_story'
+    assert worker.tick()['status'] == 'succeeded'
+    assert not seen
+    service = CurationService(storage)
+    other = service.add(Item(kind='article', title=item.title))
+    other_rev = service.add(ContentRevision.from_markdown(item_id=other.id,
+        markdown=rev.markdown + ' An independent study confirmed the measurement.', evidence_basis='abstract'))
+    observe(storage, other)
+    assert worker.tick()['outcome'] == 'unresolved'
+    assert worker.tick() is None
+    assert seen[0][0] == other_rev.markdown
+    assert seen[0][1]['account']
+    assert seen[0][1]['evidence'][0]['text'] == rev.markdown
+    with storage.transaction() as repo:
+        assessed = repo.story_assessments(revision_id=other_rev.id)[0]
+        assert assessed.outcome == 'unresolved'
+        finding = next(f for f in assessed.findings if f.rule_id == 'independent-repeat-review')
+        assert finding.result == 'unresolved' and 'verdict=possible_material_change' in finding.rationale
+        assert len(repo.story_sources(assessed.story_id)) == 1
+
+
+def test_repeat_review_is_metered_with_separate_budget_and_complete_input(tmp_path):
+    import asyncio
+    import json
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.messages import ModelResponse, ToolCallPart, UserPromptPart
+    from pydantic_ai.usage import RunUsage
+    from paperflow_assistant.runtime import Context, fingerprint
+    from paperflow_assistant.stories import review_repeat
+
+    settings, storage, item, rev, output = fixture(tmp_path)
+    worker = AssistantWorker(settings)
+    worker.initialize()
+    worker.store.reconcile(storage, fingerprint(settings.assistant))
+    job = worker.store.claim(3)
+    context = Context(job, rev, storage, worker.store, settings.assistant, None, RunUsage())
+    candidate = {'account': 'Original story', 'evidence': [{'text': rev.markdown, 'truncated': False}]}
+    def respond(messages, info):
+        prompt = next(json.loads(part.content) for message in messages for part in message.parts
+                      if isinstance(part, UserPromptPart))
+        assert prompt['incoming_title'] == item.title
+        assert prompt['incoming_text'] == rev.markdown
+        assert prompt['incoming_truncated'] is False
+        assert prompt['earlier_coverage'] == candidate
+        assert 'proposed_findings' not in prompt and 'proposed_decision' not in prompt
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name,
+            {'verdict': 'all_claims_covered'})])
+    result = asyncio.run(review_repeat(context, item.model_dump(mode='json'), candidate, FunctionModel(respond)))
+    assert result.verdict == 'all_claims_covered'
+    records = worker.store.request_metrics(job['id'], job['attempts'])
+    assert len(records) == 1
+    assert records[0]['role'] == 'story_repeat_review'
+    assert records[0]['model'] == settings.assistant.decision_model
+    assert records[0]['prices']['model'] == settings.assistant.decision_model
+    assert context.usage.requests == 1
+
+
+def test_independent_review_failure_retries_without_suppression(tmp_path, monkeypatch):
+    monkeypatch.setattr('paperflow_story_vectors.semantic_candidates', lambda *args, **kwargs: [])
+    settings, storage, item, rev, output = fixture(tmp_path)
+    observe(storage, item)
+    calls = []
+    def assess(ctx, item, candidates):
+        return (decision('repeated_coverage', candidates[0]['story']['id'], ctx.revision.markdown)
+                if candidates else decision('new_story', text=ctx.revision.markdown))
+    def failing_review(*args):
+        calls.append(True)
+        raise ConnectionError('unavailable')
+    worker = AssistantWorker(settings, runner=runner(output), assessment_runner=assess, repeat_review_runner=failing_review)
+    worker.initialize()
+    assert worker.tick()['outcome'] == 'new_story'
+    assert worker.tick()['status'] == 'succeeded'
+    other = CurationService(storage).add(Item(kind='article', title=item.title))
+    other_rev = CurationService(storage).add(ContentRevision.from_markdown(item_id=other.id,
+        markdown=rev.markdown, evidence_basis='abstract'))
+    observe(storage, other)
+    assert worker.tick()['status'] == 'failed'
+    with storage.transaction() as repo:
+        assert not repo.story_assessments(revision_id=other_rev.id)
+    with worker.store.connection(True) as conn:
+        conn.execute("UPDATE assistant_jobs SET available_at=0 WHERE status='queued'")
+    worker.repeat_review_runner = lambda *args: {'verdict': 'insufficient_evidence'}
+    assert worker.tick()['outcome'] == 'unresolved'
+    assert len(calls) == 1
+
+
+def test_repeat_review_cannot_suppress_when_incoming_text_is_truncated(tmp_path, monkeypatch):
+    monkeypatch.setattr('paperflow_story_vectors.semantic_candidates', lambda *args, **kwargs: [])
+    settings, storage, item, rev, output = fixture(tmp_path)
+    observe(storage, item)
+    def assess(ctx, item, candidates):
+        return (decision('repeated_coverage', candidates[0]['story']['id'], ctx.revision.markdown[:60])
+                if candidates else decision('new_story', text=ctx.revision.markdown))
+    worker = AssistantWorker(settings, runner=runner(output), assessment_runner=assess,
+        repeat_review_runner=lambda *args: {'verdict': 'all_claims_covered'})
+    worker.initialize()
+    assert worker.tick()['outcome'] == 'new_story'
+    assert worker.tick()['status'] == 'succeeded'
+    other = CurationService(storage).add(Item(kind='article', title=item.title))
+    other_rev = CurationService(storage).add(ContentRevision.from_markdown(item_id=other.id,
+        markdown=rev.markdown + ' More detail.' * 4000, evidence_basis='abstract'))
+    observe(storage, other)
+    assert worker.tick()['outcome'] == 'unresolved'
+    with storage.transaction() as repo:
+        assessment = repo.story_assessments(revision_id=other_rev.id)[0]
+        assert 'complete_input=false' in assessment.findings[-1].rationale

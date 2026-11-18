@@ -414,7 +414,7 @@ async def run_agent(context, item, reasoner, decision):
 
 
 class AssistantWorker:
-    def __init__(self, settings, *, runner=None, assessment_runner=None):
+    def __init__(self, settings, *, runner=None, assessment_runner=None, repeat_review_runner=None):
         self.settings = settings.assistant
         self.storage = SQLiteResearchStorage(settings.storage)
         if self.settings.path.resolve() == settings.storage.path.resolve():
@@ -422,6 +422,7 @@ class AssistantWorker:
         self.store = AssistantStore(self.settings.path)
         self.runner = runner
         self.assessment_runner = assessment_runner
+        self.repeat_review_runner = repeat_review_runner
 
     def initialize(self):
         self.store.initialize()
@@ -468,7 +469,8 @@ class AssistantWorker:
 
     def _assess_revision(self, context, item, start):
         job = context.job
-        from paperflow_assistant.stories import (RULE_VERSION, AssessmentDecision, assess,
+        from paperflow_assistant.stories import (RULE_VERSION, AssessmentDecision, AssessmentFinding,
+                                                RepeatReview, assess, review_repeat,
                                                 validate_decision, account_markdown)
         from paperflow_story_models import Story, StoryAssessment, StoryFinding
         from paperflow_story_vectors import semantic_candidates
@@ -519,6 +521,50 @@ class AssistantWorker:
                 logger.warning(json.dumps({'event': 'story.assessment.validation_failed',
                     'run_id': job['id'], 'reason': str(exc)}))
                 raise
+            if decision.outcome == 'repeated_coverage':
+                # Re-read the candidate snapshot; application rechecks the version after the model call.
+                from paperflow_storage import ConflictError
+                with self.storage.transaction() as repo:
+                    story = repo.get_story(decision.story_id)
+                    if story is None or story.version != selected['story']['version']:
+                        raise ConflictError('story changed; reassess before independent review')
+                    evidence = []
+                    remaining = 4000
+                    story_sources = repo.story_sources(story.id)
+                    for source in story_sources[:1]:
+                        revision = repo.get(ContentRevision, source.revision_id)
+                        if revision is None or not repo.is_public_revision(source.revision_id):
+                            raise ValueError('Candidate evidence is unavailable or private')
+                        allowed = remaining
+                        evidence.append({'revision_id': str(revision.id), 'evidence_basis': revision.evidence_basis,
+                            'text': revision.markdown[:allowed], 'total_characters': len(revision.markdown),
+                            'truncated': len(revision.markdown) > allowed})
+                        remaining -= allowed
+                        if not remaining:
+                            break
+                    account = next((paragraph.strip() for paragraph in story.account.split('\n\n')
+                                    if paragraph.strip() and not paragraph.lstrip().startswith('#')), '')
+                    candidate_review = {'story_id': str(story.id), 'story_version': story.version,
+                        'title': story.title, 'account': account[:1200],
+                        'account_truncated': len(account) > 1200, 'evidence': evidence,
+                        'sources_total': len(story_sources), 'sources_included': len(evidence)}
+                if self.repeat_review_runner:
+                    review = RepeatReview.model_validate(self.repeat_review_runner(context, item, candidate_review))
+                else:
+                    _, decision_model = provider_models(self.settings)
+                    review = asyncio.run(review_repeat(context, item, candidate_review, decision_model))
+                complete = (len(context.revision.markdown) <= min(self.settings.source_character_limit, 40000)
+                    and bool(candidate_review['evidence'])
+                    and any(source['text'].strip() for source in candidate_review['evidence']))
+                confirmed = review.verdict == 'all_claims_covered' and complete
+                result = 'verdict=' + review.verdict + ', complete_input=' + str(complete).lower()
+                finding = AssessmentFinding(rule_id='independent-repeat-review',
+                    result='confirmed' if confirmed else 'unresolved',
+                    rationale='Independent review by ' + self.settings.decision_model + ': ' + result,
+                    missing_evidence='' if confirmed else 'Independent review did not establish safe suppression.',
+                    passages=list(decision.findings[0].passages))
+                decision = decision.model_copy(update={'outcome': 'repeated_coverage' if confirmed else 'unresolved',
+                    'findings': [*decision.findings, finding]})
             findings = tuple(StoryFinding(rule_id=f.rule_id, rule_version=RULE_VERSION,
                 result=f.result, rationale=f.rationale, passages=tuple(f.passages),
                 missing_evidence=f.missing_evidence) for f in decision.findings)

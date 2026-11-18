@@ -32,6 +32,7 @@ without skips or expected failures. `scripts/check code` runs the backend gate w
 | reader-acceptance::AC-12 | reader-acceptance::FR-12 | covered | tests/test_story_worker.py::test_worker_routes_repeat_without_curation | — | Two observed sources share one story and a repeat does not run curation. |
 | reader-acceptance::AC-13 | reader-acceptance::FR-13 | covered | tests/test_story_worker.py::test_material_updates_coalesce_and_include_prior_evidence | — | Worker combines pending contributions with both source revisions. |
 | reader-acceptance::AC-14 | reader-acceptance::FR-14 | covered | tests/test_publish_site.py::test_story_eligibility_window_privacy_counts_and_links | — | SQLite publication checks source eligibility, privacy, counts, limits and stable links. |
+| reader-acceptance::AC-15 | reader-acceptance::FR-15 | covered | tests/test_reader_ratings.py::test_gateway_ratings_are_versioned_idempotent_and_pseudonymous | published-site.spec.js::anonymous rating is retryable, deduplicates concurrent clicks, and supports changes | Gateway-authenticated SQLite writes, stable pseudonyms, keyboard feedback, retry and update. |
 <!-- acceptance-coverage:end -->
 
 Covered means an executable test exists; only a successful run establishes a passing result.

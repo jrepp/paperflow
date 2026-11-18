@@ -1,5 +1,7 @@
 """FastAPI application composition root for the local Paperflow service."""
 from contextlib import asynccontextmanager
+import os
+from pathlib import Path
 from uuid import UUID
 import time
 
@@ -53,6 +55,9 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
     identity = build_info()
     app = FastAPI(title="Paperflow", version=identity["version"], lifespan=lifespan,
                   description="Local research service and integration monitor")
+    if token_path := os.environ.get("PAPERFLOW_RATING_GATEWAY_TOKEN_FILE"):
+        from paperflow_ratings import ratings_router
+        app.include_router(ratings_router(storage, settings.assistant, Path(token_path)))
     if publisher:
         from paperflow_publish_api import publishing_router
         app.include_router(publishing_router(publisher, settings.publishing))
@@ -232,7 +237,6 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
             raise HTTPException(404, "Channel not found") from None
         return monitor.store.channels()
 
-    from pathlib import Path
     from fastapi.staticfiles import StaticFiles
     from fastapi.responses import FileResponse
     static = Path(__file__).parent / 'paperflow_reader' / 'static'

@@ -141,3 +141,14 @@ and private manual sources, when the static site is built, then the story shows
 its public account and sources while private inputs and analyses remain absent.
 The feed respects its window and per-channel limit and retains item counts and
 links for existing consumers.
+
+## FR-15: Rate published curation
+
+### AC-15: Save one reader rating per curation version
+
+Requirement: FR-15
+
+Given an expanded, published curation, readers can submit or change a rating
+without an account. A successful save closes the curation and returns focus.
+A failed request leaves it open for retry. Repeated submissions from the same
+gateway-verified reader and browser update a single entry for that version.

@@ -279,7 +279,7 @@ def test_shared_items_have_unique_row_anchors_and_one_document(tmp_path):
             entries=(SourceEntry(source_id='same-paper', title=item.title, url=item.canonical_url),)))
     build_site_from_storage(storage, out, assistant_store=assistant)
     page = (out / 'index.html').read_text()
-    ids = re.findall(r'\bid="([^"]+)"', page)
+    ids = re.findall(r'(?<![\w-])id="([^"]+)"', page)
     assert len(ids) == len(set(ids))
     assert page.count(f'id="curation-{item.id}"') == 1
 
@@ -490,3 +490,84 @@ def test_plain_public_item_hides_analysis_citing_private_revision(tmp_path):
     build_site_from_storage(storage, out, assistant_store=assistant)
     page = (out / 'index.html').read_text()
     assert 'Private cited material' not in page and 'A model summary' not in page
+
+
+def test_verified_previous_release_preserves_only_its_exact_public_markdown(tmp_path):
+    import hashlib
+    from uuid import uuid4
+    from paperflow_domain import ContentRevision
+
+    out, storage, assistant, item = _curated_site(tmp_path)
+    old_html = (out / 'index.html').read_bytes()
+    original_manifest = json.loads((out / 'build.json').read_text())
+    root = tmp_path / 'releases'
+    release_id = uuid4().hex
+    release = root / release_id
+    release.mkdir(parents=True)
+    (release / 'index.html').write_bytes(old_html)
+    manifest = dict(original_manifest, release_id=release_id, index_sha256=hashlib.sha256(old_html).hexdigest())
+    (release / 'build.json').write_text(json.dumps(manifest))
+    receipts = root.parent / '.build-jobs'
+    receipts.mkdir()
+    receipt = {'id': release_id, 'status': 'succeeded', 'release_id': release_id, 'build_id': manifest['build_id']}
+    (receipts / (release_id + '.json')).write_text(json.dumps(receipt))
+    with storage.transaction(write=True) as repo:
+        public = repo.revisions_for_item(item.id)[0]
+        repo._conn.execute('DELETE FROM research_public_revisions WHERE revision_id=?', (str(public.id),))
+        repo.add(ContentRevision.from_markdown(item_id=item.id, markdown='PRIVATE CHANGED REVISION'))
+        assert not repo.is_public_revision(public.id)
+    with assistant.connection(True) as conn:
+        row = conn.execute('SELECT id,output FROM assistant_jobs WHERE output IS NOT NULL').fetchone()
+        analysis = json.loads(row['output'])
+        analysis['summary'] = 'PRIVATE CHANGED SUMMARY'
+        conn.execute("INSERT INTO assistant_jobs (id,revision_id,fingerprint,status,queued_at,finished_at,output,validation,evaluation) SELECT ?,revision_id,fingerprint,'succeeded',queued_at,finished_at+1,?,?,? FROM assistant_jobs WHERE id=?", ('new-private-run', json.dumps(analysis), '{}', '{}', row['id']))
+    def render():
+        build_site_from_storage(storage, out, assistant_store=assistant, releases_dir=root)
+        return (out / 'index.html').read_text()
+    page = render()
+    assert 'A model summary &lt;img' in page
+    published_run = row['id']
+    assert page.count(f'data-version="{published_run}"') == 2
+    assert 'new-private-run' not in page
+    assert 'PRIVATE CHANGED' not in page
+    assert f'id="curation-{item.id}"' in page
+    with storage.transaction() as repo:
+        assert not repo.is_public_revision(public.id)
+    # A copied release with no matching receipt, or a modified index, is never proof.
+    (receipts / (release_id + '.json')).unlink()
+    assert 'A model summary &lt;img' not in render()
+    (receipts / (release_id + '.json')).write_text(json.dumps(receipt))
+    (release / 'index.html').write_bytes(old_html + b'altered')
+    assert 'A model summary &lt;img' not in render()
+    (release / 'index.html').write_bytes(old_html)
+    manifest['release_id'] = uuid4().hex
+    (release / 'build.json').write_text(json.dumps(manifest))
+    assert 'A model summary &lt;img' not in render()
+    # Even a forged index and recomputed digest cannot introduce altered Markdown.
+    forged = old_html.replace(b'A%20model%20summary', b'SECRET%20FORGED%20SUMMARY')
+    assert forged != old_html
+    (release / 'index.html').write_bytes(forged)
+    manifest['release_id'] = release_id
+    manifest['index_sha256'] = hashlib.sha256(forged).hexdigest()
+    (release / 'build.json').write_text(json.dumps(manifest))
+    assert 'SECRET FORGED' not in render()
+    assert 'A model summary &lt;img' not in render()
+    # An unverifiable newer release must not revive content from an older one.
+    import os
+    (release / 'index.html').write_bytes(old_html)
+    manifest['index_sha256'] = hashlib.sha256(old_html).hexdigest()
+    (release / 'build.json').write_text(json.dumps(manifest))
+    newer = root / uuid4().hex
+    newer.mkdir()
+    os.utime(newer, (release.stat().st_mtime + 10, release.stat().st_mtime + 10))
+    assert 'A model summary &lt;img' not in render()
+
+
+def test_unanalysed_item_has_source_disclosure_but_no_rating():
+    from paperflow_domain import Item
+    from paperflow_publish_site import _card
+
+    result = _card(Item(kind='article', title='A fresh source'), {})
+    assert 'Explore A fresh source' in result
+    assert 'Source details' in result
+    assert 'data-rating=' not in result

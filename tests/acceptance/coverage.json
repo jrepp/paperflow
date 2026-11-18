@@ -98,5 +98,13 @@
     "disposition": "covered",
     "test": "tests/test_publish_site.py::test_story_eligibility_window_privacy_counts_and_links",
     "reason": "SQLite publication checks source eligibility, privacy, counts, limits and stable links."
+  },
+  {
+    "criterion": "AC-15",
+    "requirement": "FR-15",
+    "disposition": "covered",
+    "test": "tests/test_reader_ratings.py::test_gateway_ratings_are_versioned_idempotent_and_pseudonymous",
+    "browser_test": "published-site.spec.js::anonymous rating is retryable, deduplicates concurrent clicks, and supports changes",
+    "reason": "Gateway-authenticated SQLite writes, stable pseudonyms, keyboard feedback, retry and update."
   }
 ]

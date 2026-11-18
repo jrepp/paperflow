@@ -9,10 +9,13 @@ identity, the applied policy, and per-channel counts.
 from __future__ import annotations
 
 import html
+import hashlib
+import re
+from html.parser import HTMLParser
 
 from markdown_it import MarkdownIt
 import json
-from urllib.parse import quote
+from urllib.parse import quote, unquote_to_bytes
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from importlib.resources import files
@@ -59,14 +62,14 @@ def build_site(config_path: str, out_dir: str | Path, *, window_hours: int = DEF
     return build_site_from_storage(SQLiteResearchStorage(settings.storage), out_dir,
                                    window_hours=window_hours, per_channel_limit=per_channel_limit, now=now,
                                    workspace_url=settings.publishing.workspace_url,
-                                   assistant_store=_assistant_store(settings.assistant))
+                                   assistant_store=_assistant_store(settings.assistant), releases_dir=settings.publishing.releases_dir)
 
 
 def build_site_from_storage(storage: SQLiteResearchStorage, out_dir: str | Path, *,
                             window_hours: int = DEFAULT_WINDOW_HOURS,
                             per_channel_limit: int = DEFAULT_PER_CHANNEL_LIMIT,
                             now: datetime | None = None, workspace_url: str | None = None,
-                            assistant_store=None) -> dict:
+                            assistant_store=None, releases_dir: Path | None = None) -> dict:
     """Render the published bundle from an existing research storage."""
     workspace_url = PublishingSettings(workspace_url=workspace_url).workspace_url
     if not 1 <= window_hours <= 24 * 30:
@@ -100,6 +103,21 @@ def build_site_from_storage(storage: SQLiteResearchStorage, out_dir: str | Path,
                     "result": result,
                     "stale": bool(result and revision and str(revision.id) != result["revision_id"]),
                 }
+    if releases_dir and assistant_store:
+        missing = {str(item.id) for section in sections for _, item in section['items'] if not cards[item.id]['result']}
+        legacy = _verified_legacy_markdown(releases_dir, missing)
+        items = {str(item.id): item for section in sections for _, item in section['items']}
+        for item_id, markdown in legacy.items():
+            from uuid import UUID
+            run = re.search(r'^Curation run: ([^\n]+)$', '\n'.join(markdown.splitlines()[:12]), re.MULTILINE)
+            if not run:
+                continue
+            try:
+                previous = assistant_store.analysis_for_run(item_id, run.group(1))
+                if previous and hashlib.sha256(_curation_markdown(items[item_id], previous).encode()).digest() == hashlib.sha256(markdown.encode()).digest():
+                    cards[UUID(item_id)].update(legacy_markdown=markdown, legacy_run_id=previous['run_id'])
+            except (ValueError, KeyError, TypeError):
+                continue
     build_id = now.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     manifest = {
         "build_id": build_id,
@@ -115,6 +133,89 @@ def build_site_from_storage(storage: SQLiteResearchStorage, out_dir: str | Path,
     (out / "index.html").write_text(_render(sections, manifest, workspace_url=workspace_url, cards=cards, stories=stories), encoding="utf-8")
     (out / "build.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return manifest
+
+
+class _LegacyCurationParser(HTMLParser):
+    def __init__(self, wanted):
+        super().__init__(convert_charrefs=True)
+        self.wanted = wanted
+        self.section = None
+        self.depth = 0
+        self.documents = {}
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == 'section':
+            if self.depth:
+                self.depth += 1
+            else:
+                identifier = attrs.get('id', '')
+                if identifier.startswith('curation-') and identifier[9:] in self.wanted:
+                    self.section = identifier[9:]
+                    self.depth = 1
+        elif tag == 'a' and self.depth and self.section:
+            href = attrs.get('href', '')
+            if attrs.get('download') == f'curation-{self.section}.md' and href.startswith('data:text/markdown;charset=utf-8,'):
+                try:
+                    markdown = unquote_to_bytes(href.split(',', 1)[1]).decode('utf-8')
+                except (ValueError, UnicodeDecodeError):
+                    return
+                if len(markdown) <= 1_000_000 and markdown.startswith('# ') and '\n## Summary\n' in markdown:
+                    self.documents[self.section] = markdown
+
+    def handle_endtag(self, tag):
+        if tag == 'section' and self.depth:
+            self.depth -= 1
+            if not self.depth:
+                self.section = None
+
+
+def _verified_legacy_markdown(releases_dir, wanted):
+    """Read bounded prior releases; only a matching completed receipt and digest qualify."""
+    releases = Path(releases_dir)
+    receipts = releases.parent / '.build-jobs'
+    if not wanted or not releases.is_dir() or not receipts.is_dir():
+        return {}
+    results = {}
+    try:
+        latest = max((p for p in releases.iterdir() if re.fullmatch(r'[0-9a-f]{32}', p.name)
+                      and p.is_dir()), key=lambda p: p.stat().st_mtime, default=None)
+    except OSError:
+        return {}
+    if latest is None:
+        return {}
+    # Do not resurrect removed content from an older release if the newest
+    # release is incomplete or cannot be verified.
+    paths = [receipts / (latest.name + '.json')]
+    for receipt in paths:
+        try:
+            release_id = receipt.stem
+            release = releases / release_id
+            manifest_path, index_path = release / 'build.json', release / 'index.html'
+            if any(p.is_symlink() for p in (receipt, release, manifest_path, index_path)):
+                continue
+            if receipt.stat().st_size > 65536 or manifest_path.stat().st_size > 65536 or index_path.stat().st_size > 20_000_000:
+                continue
+            with receipt.open('rb') as f:
+                job = json.loads(f.read(65537))
+            with manifest_path.open('rb') as f:
+                manifest = json.loads(f.read(65537))
+            if (job.get('status') != 'succeeded' or str(job.get('id', '')).replace('-', '') != release_id
+                    or job.get('release_id') != release_id or manifest.get('release_id') != release_id
+                    or job.get('build_id') != manifest.get('build_id')):
+                continue
+            with index_path.open('rb') as f:
+                index = f.read(20_000_001)
+            if len(index) > 20_000_000 or hashlib.sha256(index).hexdigest() != manifest.get('index_sha256'):
+                continue
+            parser = _LegacyCurationParser(wanted - results.keys())
+            parser.feed(index.decode('utf-8'))
+            results.update(parser.documents)
+            if wanted <= results.keys():
+                break
+        except (OSError, ValueError, UnicodeDecodeError, TypeError):
+            continue
+    return results
 
 
 def _public_analysis(repo, result):
@@ -178,6 +279,19 @@ def _story_projection(repo, selected_ids):
     return sorted(projected, key=lambda row: (row["story"].material_at, str(row["story"].id)), reverse=True)
 
 
+def _card_actions(kind=None, record_id=None, version=None):
+    parts = ['<div class="card-actions">']
+    if kind:
+        parts.append('<div class="card-rating" role="group" aria-label="Was this useful?" '
+                     f'data-kind="{html.escape(kind, quote=True)}" data-id="{html.escape(str(record_id), quote=True)}" '
+                     f'data-version="{html.escape(str(version), quote=True)}">'
+                     '<span>Was this useful?</span><button type="button" data-rating="helpful" aria-pressed="false">Helpful</button>'
+                     '<button type="button" data-rating="needs_work" aria-pressed="false">Needs work</button>'
+                     '<span class="rating-status" role="status" aria-live="polite"></span></div>')
+    parts.append('<button class="card-close" type="button" data-close-card>Close</button></div>')
+    return ''.join(parts)
+
+
 def _story_row(row, now, anchors):
     story = row["story"]
     esc = html.escape
@@ -187,7 +301,9 @@ def _story_row(row, now, anchors):
              '<h2><a href="#story-account-' + str(story.id) + '">' + esc(story.title) + '</a></h2>',
              '<p>' + esc(summary) + '</p>',
              '<p><a class="read-story" href="#story-account-' + str(story.id) + '">Read story</a></p>',
-             '<details class="curation-card"><summary>Sources</summary><div class="curation-body"><ul>']
+             '<details class="curation-card"><summary><span>Explore ' + esc(story.title) + '</span>'
+             + '<span class="card-count">' + str(len(row['sources'])) + (' source' if len(row['sources']) == 1 else ' sources')
+             + '</span></summary><div class="curation-body"><ul>']
     if row.get('pending'):
         parts.insert(4, '<p class="muted">This account is awaiting an update for new material.</p>')
     changes = [finding.rationale for entry in row["sources"] if entry["assessment"]
@@ -219,7 +335,8 @@ def _story_row(row, now, anchors):
         else:
             parts.append('<p class="muted">Contribution assessment unavailable.</p>')
         parts.append('</li>')
-    parts.append('</ul></div></details></article></li>')
+    parts.append('</ul>' + _card_actions('story', story.id, story.version) + '</div></details>'
+                 '<p class="rating-receipt" hidden></p></article></li>')
     return ''.join(parts)
 
 
@@ -237,11 +354,12 @@ def _render_markdown(markdown, title=None):
     return renderer.render('\n'.join(lines))
 
 
-def _document_shell(anchor, back_anchor, back_label, title, markdown, body, filename, label):
+def _document_shell(anchor, back_anchor, back_label, title, markdown, body, filename, label, kind, record_id, version):
     return (f'<section class="curation-document" id="{anchor}" tabindex="-1" aria-label="{label}">'
             f'<a class="document-back" href="#{back_anchor}">{back_label}</a>'
             f'<h2>{html.escape(title)}</h2><div class="document-prose">{body}</div>'
-            f'<div class="document-actions"><a download="{filename}" '
+            + _card_actions(kind, record_id, version)
+            + f'<div class="document-actions"><a download="{filename}" '
             f'href="data:text/markdown;charset=utf-8,{quote(markdown, safe="")}">Download Markdown</a></div></section>')
 
 
@@ -249,7 +367,7 @@ def _story_document(row):
     story = row["story"]
     return _document_shell(f'story-account-{story.id}', f'story-{story.id}', 'Back to story',
         story.title, story.account, _render_markdown(story.account, story.title),
-        f'story-{story.id}.md', 'Story and curation')
+        f'story-{story.id}.md', 'Story and curation', 'story', story.id, story.version)
 
 
 def _assistant_store(settings):
@@ -296,6 +414,7 @@ def _card(item, card):
     esc = html.escape
     observation = card.get("observation")
     result = card.get("result")
+    legacy = card.get("legacy_markdown")
     metadata = [("Type", item.kind), ("Published", (item.published_at or item.created_at).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))]
     if item.authors:
         metadata.append(("Authors", ", ".join(item.authors)))
@@ -311,14 +430,20 @@ def _card(item, card):
         if entry.url != item.canonical_url:
             links.append(f'<a href="{esc(str(entry.url))}">Source entry</a>')
     parts = []
+    if legacy and not result:
+        summary = legacy.split('\n## Summary\n', 1)[1].split('\n## ', 1)[0].strip()
+        parts.append('<div class="model-summary"><h3>Model analysis</h3><p>' + esc(summary)
+                     + '</p><p class="muted">Previously published curation.</p></div>')
     if result:
         if card.get('stale'):
             parts.append('<p class="muted">This curation describes an earlier source revision.</p>')
         parts.append('<div class="model-summary"><h3>Model analysis</h3><p>'
                      + esc(result['analysis']['summary']) + '</p><p class="muted">Evidence: '
                      + esc(result['analysis']['evidence_basis'].replace('_', ' ')) + '</p></div>')
-    parts += ['<details class="curation-card"><summary aria-label="Curation &amp; details for '
-             + esc(item.title) + '">Curation &amp; details</summary><div class="curation-body">']
+    count = len(result['analysis']['findings']) if result else 0
+    description = (str(count) + (' finding' if count == 1 else ' findings')) if result else 'Source details'
+    parts += ['<details class="curation-card"><summary><span>Explore ' + esc(item.title)
+             + '</span><span class="card-count">' + description + '</span></summary><div class="curation-body">']
     if links:
         parts.append('<div class="curation-links">' + ' · '.join(links) + '</div>')
         links = []
@@ -331,6 +456,8 @@ def _card(item, card):
                          + esc(finding["kind"].replace('_', ' ') + ' · ' + finding["uncertainty"]) + '</p></li>')
         parts.append('</ul><h3>Limitations</h3><ul>' + ''.join('<li>' + esc(v) + '</li>' for v in analysis['limitations']) + '</ul>')
         links.append(f'<a href="#curation-{item.id}">Read curation Markdown</a>')
+    elif legacy:
+        links.append(f'<a href="#curation-{item.id}">Read curation Markdown</a>')
     else:
         parts.append('<p class="muted">No model curation available yet.</p>')
         if observation and observation.entry.excerpt:
@@ -338,25 +465,31 @@ def _card(item, card):
     if links:
         parts.append('<div class="curation-links">' + ' · '.join(links) + '</div>')
     parts.append('<details class="source-metadata"><summary>Source details</summary><dl>' + ''.join('<div><dt>' + esc(k) + '</dt><dd>' + esc(v) + '</dd></div>' for k, v in metadata) + '</dl></details>')
+    version = result['run_id'] if result else card.get('legacy_run_id')
+    parts.append(_card_actions('item', item.id, version) if version else _card_actions())
     parts.append('</div></details>')
     return ''.join(parts)
 
 
 def _document(item, card):
     result = card.get("result")
-    if not result:
+    legacy = card.get('legacy_markdown')
+    if not result and not legacy:
         return ''
-    markdown = _curation_markdown(item, result)
+    markdown = _curation_markdown(item, result) if result else legacy
     # Keep technical provenance in the downloadable original and after the article.
     content = markdown.split('## Summary', 1)[-1]
     body = '<h3>Summary</h3>' + _render_markdown(content)
     source_link = (f'<a href="{html.escape(str(item.canonical_url), quote=True)}">Open source</a><br>'
                    if item.canonical_url else '')
-    body += ('<details class="document-provenance"><summary>Provenance</summary><p>' + source_link
-             + 'Source revision: ' + html.escape(result['revision_id']) + '<br>Curation run: '
-             + html.escape(result['run_id']) + '</p></details>')
+    if result:
+        body += ('<details class="document-provenance"><summary>Provenance</summary><p>' + source_link
+                 + 'Source revision: ' + html.escape(result['revision_id']) + '<br>Curation run: '
+                 + html.escape(result['run_id']) + '</p></details>')
+    version = result['run_id'] if result else card.get('legacy_run_id')
     return _document_shell(f'curation-{item.id}', f'item-{item.id}', 'Back to link', item.title,
-                           markdown, body, f'curation-{item.id}.md', 'Curation Markdown')
+                           markdown, body, f'curation-{item.id}.md', 'Curation Markdown',
+                           'item' if version else None, item.id, version)
 
 
 def _balanced(sections: list[dict]) -> list[tuple]:
@@ -396,7 +529,7 @@ def _item_li(pair: tuple[datetime, object], now: datetime, cards: dict, suffix: 
     age = html.escape(_age_text(when, now))
     ref = f'<a href="{url}">{title}</a>' if url else title
     meta = f"{host} · {age}" if host else age
-    return f'<li class="feed-row"><article id="item-{item.id}{suffix}" tabindex="-1"><div class="meta item-meta">{meta}</div><h2>{ref}</h2>{_card(item, cards.get(item.id, {}))}</article></li>'
+    return f'<li class="feed-row"><article id="item-{item.id}{suffix}" tabindex="-1"><div class="meta item-meta">{meta}</div><h2>{ref}</h2>{_card(item, cards.get(item.id, {}))}<p class="rating-receipt" hidden></p></article></li>'
 
 
 def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None = None, cards: dict | None = None, stories: list[dict] | None = None) -> str:
@@ -420,7 +553,11 @@ def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None =
         '</a></div></header>',
         '<main id="main" class="shell py-8" tabindex="-1">',
         '<div class="feed-toolbar"><h1>Latest</h1></div>',
-        '<p class="muted published-intro">Recent reading from all sources.</p>',
+        '<p class="muted published-intro">Recent reading from all sources. <strong>AI curation</strong> · Ratings are pseudonymous.</p>',
+        '<details class="rating-privacy"><summary>How ratings work</summary>'
+        '<p>Ratings use a private browser identifier to count repeat votes once. The service hashes your IP address '
+        'and browser request headers and stores the rating identifier without the raw inputs.</p></details>',
+        '<div class="sr-status" id="rating-announcement" role="status" aria-live="polite"></div>',
     ]
     if latest or stories:
         anchors = {pair[1].id for pair in latest}
@@ -442,5 +579,7 @@ def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None =
     parts.append("</main>")
     workspace_link = f' · <a href="{esc(workspace_url, quote=True)}">Open workspace</a>' if workspace_url else ""
     parts.append('<footer class="shell py-8 muted">Updated ' + now.strftime("%Y-%m-%d %H:%M UTC")
-                 + workspace_link + "</footer></body></html>")
+                 + workspace_link + '</footer><script>'
+                 + files('paperflow_reader').joinpath('static/published.js').read_text(encoding='utf-8')
+                 + '</script></body></html>')
     return "\n".join(parts)

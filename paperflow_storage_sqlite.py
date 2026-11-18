@@ -42,6 +42,11 @@ TABLES: dict[type[Record], tuple[str, tuple[str, ...]]] = {
 }
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS research_reader_ratings (
+    reader_hash TEXT NOT NULL, kind TEXT NOT NULL, target_id TEXT NOT NULL,
+    version TEXT NOT NULL, rating TEXT NOT NULL CHECK(rating IN ('helpful','needs_work')),
+    PRIMARY KEY(reader_hash,kind,target_id,version)
+);
 CREATE TABLE IF NOT EXISTS research_public_revisions (revision_id TEXT PRIMARY KEY REFERENCES research_revisions(id));
 CREATE TABLE IF NOT EXISTS research_stories (id TEXT PRIMARY KEY, version INTEGER NOT NULL, payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS research_story_versions (story_id TEXT NOT NULL REFERENCES research_stories(id), version INTEGER NOT NULL, payload TEXT NOT NULL, assessment_ids TEXT NOT NULL, PRIMARY KEY(story_id, version));
@@ -469,6 +474,11 @@ class SQLiteResearchRepository(StoryRepositoryMixin):
         rows = self._conn.execute("SELECT i.payload FROM research_items i" + clause + " ORDER BY i.rowid DESC LIMIT ? OFFSET ?",
                                   (*params, limit, offset))
         return [Item.model_validate_json(row[0]) for row in rows]
+
+    def save_reader_rating(self, reader, kind, target_id, version, rating):
+        self._conn.execute("""INSERT INTO research_reader_ratings VALUES (?,?,?,?,?)
+            ON CONFLICT(reader_hash,kind,target_id,version) DO UPDATE SET rating=excluded.rating""",
+            (reader, kind, str(target_id), version, rating))
 
     def mark_public_revision(self, revision_id):
         self._conn.execute('INSERT OR IGNORE INTO research_public_revisions VALUES (?)', (str(revision_id),))
