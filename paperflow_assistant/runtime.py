@@ -572,7 +572,7 @@ class AssistantWorker:
             assessment = StoryAssessment(revision_id=context.revision.id,
                 story_id=decision.story_id, story_version=selected['story']['version'] if selected else None,
                 outcome=decision.outcome, findings=findings, evidence_basis=context.revision.evidence_basis,
-                creator=self.settings.reasoning_model, creator_kind='processor',
+                creator=self.settings.decision_model, creator_kind='processor',
                 processor_version=fingerprint(self.settings), rule_set_version=RULE_VERSION,
                 processing_run_id=uuid5(NAMESPACE_URL, job['id']))
             with self.storage.transaction(write=True) as repo:
