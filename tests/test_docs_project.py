@@ -16,7 +16,11 @@ def document(title):
 
 
 @pytest.fixture
-def repository(tmp_path):
+def repository(tmp_path, monkeypatch):
+    # Hooks may export their own index and worktree to child processes.
+    # Keep the temporary repository independent of the caller's Git state.
+    for name in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'):
+        monkeypatch.delenv(name, raising=False)
     subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
     (tmp_path/'docs/guides').mkdir(parents=True)
     (tmp_path/'docs/guides/guide.md').write_text(document('Example guide'))
