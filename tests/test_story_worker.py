@@ -79,7 +79,7 @@ def test_material_updates_coalesce_and_include_prior_evidence(tmp_path, monkeypa
     monkeypatch.setattr('paperflow_story_vectors.semantic_candidates', lambda *args, **kwargs: [])
     settings, storage, item, rev, output = fixture(tmp_path)
     service = CurationService(storage)
-    other = service.add(Item(kind='article', title=item.title + ' corrected'))
+    other = service.add(Item(kind='paper', title=item.title + ' corrected'))
     other_rev = service.add(ContentRevision.from_markdown(item_id=other.id,
         markdown=rev.markdown + ' The reported result was corrected.', evidence_basis='abstract'))
     observe(storage, item)
@@ -324,3 +324,35 @@ def test_repeat_review_cannot_suppress_when_incoming_text_is_truncated(tmp_path,
     with storage.transaction() as repo:
         assessment = repo.story_assessments(revision_id=other_rev.id)[0]
         assert 'complete_input=false' in assessment.findings[-1].rationale
+
+
+def test_paper_work_precedes_article_in_publication(tmp_path):
+    from paperflow_assistant.runtime import fingerprint
+    settings, storage, item, rev, _ = fixture(tmp_path)
+    article = CurationService(storage).add(Item(kind='article', title='Article'))
+    article_rev = CurationService(storage).add(ContentRevision.from_markdown(item_id=article.id, markdown='Article evidence.'))
+    observe(storage, item)
+    observe(storage, article)
+    worker = AssistantWorker(settings)
+    worker.initialize()
+    worker.store.reconcile(storage, fingerprint(settings.assistant))
+    job = worker.store.claim(3, priority_revisions=[str(article_rev.id), str(rev.id)])
+    assert job['revision_id'] == str(rev.id)
+
+
+def test_story_assessment_uses_decision_model(tmp_path, monkeypatch):
+    from paperflow_assistant.stories import AssessmentDecision
+    settings, storage, item, rev, output = fixture(tmp_path)
+    observe(storage, item)
+    monkeypatch.setattr('paperflow_story_vectors.semantic_candidates', lambda *args, **kwargs: [])
+    cheap_model = object()
+    monkeypatch.setattr('paperflow_assistant.runtime.provider_models', lambda settings: (object(), cheap_model))
+    seen = []
+    async def assess(context, source, candidates, model):
+        seen.append(model)
+        return AssessmentDecision.model_validate(decision('new_story', text=context.revision.markdown))
+    monkeypatch.setattr('paperflow_assistant.stories.assess', assess)
+    worker = AssistantWorker(settings, runner=runner(output))
+    worker.initialize()
+    assert worker.tick()['outcome'] == 'new_story'
+    assert seen == [cheap_model]

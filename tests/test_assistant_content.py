@@ -71,14 +71,14 @@ def test_visible_items_without_excerpts_get_content_and_queue_priority(tmp_path,
     assert fetched == ['https://example.com/top']
 
 
-def test_fetch_failure_cooldown_and_daily_budget(tmp_path):
+def test_fetch_failure_cooldown_and_token_budget(tmp_path):
     from paperflow_assistant.store import AssistantStore
     store = AssistantStore(tmp_path/'assistant.db')
     store.initialize()
     assert store.reserve_content_fetch('first', 100)
     assert not store.reserve_content_fetch('first', 100)
-    with store.connection(True) as conn:
-        conn.execute('INSERT INTO assistant_meta VALUES (?, ?)', ('attempts:'+datetime.now(UTC).date().isoformat(), '100'))
+    store.start_request('budget', 'job', 1, 'reasoning', 'test', datetime.now(UTC).timestamp())
+    store.finish_request('budget', {'usage': {'input_tokens': 90, 'output_tokens': 10}})
     assert not store.reserve_content_fetch('second', 100)
 
 

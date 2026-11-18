@@ -173,15 +173,19 @@ def test_quality_intervals_and_empty_samples(tmp_path):
     assert 0 < lo < 0.21 and hi == pytest.approx(1)
 
 
-def test_daily_budget_survives_restart(tmp_path):
+def test_rolling_token_budget_survives_restart_and_expires(tmp_path, monkeypatch):
     settings, storage, item, rev, output = fixture(tmp_path)
     worker = AssistantWorker(settings)
     worker.initialize()
     worker.store.reconcile(storage, 'one')
-    worker.store.reconcile(storage, 'two')
-    assert worker.store.claim(3, 1)
+    now = time.time()
+    worker.store.start_request('budget', 'job', 1, 'reasoning', 'test', now)
+    worker.store.finish_request('budget', {'usage': {'input_tokens': 80, 'output_tokens': 20}})
+    assert worker.store.claim(3, 100) is None
     worker.store.recover()
-    assert worker.store.claim(3, 1) is None
+    assert worker.store.claim(3, 100) is None
+    monkeypatch.setattr('paperflow_assistant.store.time.time', lambda: now + 86401)
+    assert worker.store.claim(3, 100)
 
 
 def test_fresh_revisions_take_priority_over_historical_backlog(tmp_path):
@@ -388,7 +392,7 @@ def test_budget_failure_has_exact_limit_and_persisted_diagnostics(tmp_path, capl
     assert worker.store.runs()[0]['usage']['failure'] == detail
     diagnostics = worker.store.diagnostics(settings.assistant)
     assert diagnostics['failure_groups'] == {'UsageLimitExceeded:total_tokens': 1}
-    assert diagnostics['daily_attempts_used'] == 1
+    assert diagnostics['rolling_tokens_used'] == 0  # Injected runner does not make metered requests.
     assert diagnostics['queue_blocked_reason'] == 'retry_backoff'
     assert 'curation.attempt.failed' in caplog.text
     assert '130525' in caplog.text
