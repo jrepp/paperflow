@@ -41,7 +41,7 @@ class AssistantSettings(StrictModel):
     request_limit: int = Field(default=12, ge=1, le=100)
     tool_limit: int = Field(default=40, ge=1, le=200)
     token_limit: int = Field(default=200000, ge=1000, le=500000)
-    max_output_tokens: int = Field(default=16000, ge=1000, le=64000)
+    max_output_tokens: int = Field(default=32000, ge=1000, le=64000)
     decision_limit: int = Field(default=12, ge=1, le=100)
     decision_depth: int = Field(default=3, ge=1, le=10)
     max_attempts: int = Field(default=3, ge=1, le=10)
@@ -49,7 +49,7 @@ class AssistantSettings(StrictModel):
     retry_seconds: int = Field(default=120, ge=1)
     evaluation_sample_rate: float = Field(default=0.2, ge=0, le=1)
     evaluation_token_limit: int = Field(default=32000, ge=1000, le=100000)
-    source_character_limit: int = Field(default=60000, ge=1000, le=200000)
+    source_character_limit: int = Field(default=120000, ge=1000, le=200000)
     categories: list[str] = Field(default_factory=lambda: [
         "artificial-intelligence", "computing", "science", "engineering", "society", "other",
     ], min_length=1, max_length=50)
@@ -58,7 +58,7 @@ class AssistantSettings(StrictModel):
 class Citation(StrictModel):
     revision_id: UUID
     quote: str = Field(min_length=1, max_length=2000)
-    start: int = Field(ge=0)
+    start: int = Field(default=0, ge=0, description="Unicode offset if known; the harness resolves unique exact quotes when the offset does not match.")
 
 
 class Finding(StrictModel):

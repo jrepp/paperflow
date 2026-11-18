@@ -13,11 +13,35 @@ def citations(analysis):
 
 
 def validate_citations(refs, storage):
+    """Resolve mechanical offsets for unique exact quotes, then enforce fidelity."""
     with storage.transaction() as repo:
         for citation in refs:
             revision = repo.get(ContentRevision, citation.revision_id)
-            if not revision or revision.markdown[citation.start:citation.start + len(citation.quote)] != citation.quote:
+            if not revision:
                 raise ValueError("Citation does not match its source revision")
+            if revision.markdown[citation.start:citation.start + len(citation.quote)] != citation.quote:
+                start = revision.markdown.find(citation.quote)
+                if start >= 0:
+                    if revision.markdown.find(citation.quote, start + 1) >= 0:
+                        raise ValueError("Citation does not match its source revision: ambiguous quote")
+                    citation.start = start
+                    continue
+                # PDF and HTML extraction can wrap a quotation across lines.
+                # Match whitespace only, then persist the actual source substring.
+                tokens = list(re.finditer(r'\S+', revision.markdown))
+                normalized = ' '.join(token.group() for token in tokens)
+                quote = ' '.join(citation.quote.split())
+                start = normalized.find(quote) if quote else -1
+                if start < 0 or normalized.find(quote, start + 1) >= 0:
+                    raise ValueError("Citation does not match its source revision: missing or ambiguous quote")
+                offsets = []
+                for token in tokens:
+                    if offsets:
+                        offsets.append(token.start() - 1)
+                    offsets.extend(range(token.start(), token.end()))
+                actual_start, actual_end = offsets[start], offsets[start + len(quote) - 1] + 1
+                citation.start = actual_start
+                citation.quote = revision.markdown[actual_start:actual_end]
 
 
 def validate_analysis(analysis, revision, settings, storage):

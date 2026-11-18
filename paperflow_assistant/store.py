@@ -84,7 +84,7 @@ class AssistantStore:
                              (key, doc[0], fingerprint, time.time(), time.time()))
         return len(rows)
 
-    def claim(self, max_attempts, daily_attempt_limit=100, priority_revisions=()):
+    def claim(self, max_attempts, daily_attempt_limit=100, priority_revisions=(), fingerprint=None):
         with self.connection(True) as conn:
             today = datetime.now(UTC).date().isoformat()
             daily = conn.execute("SELECT value FROM assistant_meta WHERE key=?", ('attempts:'+today,)).fetchone()
@@ -97,9 +97,10 @@ class AssistantStore:
             row = conn.execute("""SELECT j.* FROM assistant_jobs j
                 JOIN assistant_documents d ON d.revision_id=j.revision_id
                 WHERE j.status='queued' AND j.available_at<=?
+                AND (? IS NULL OR j.fingerprint=?)
                 AND NOT EXISTS (SELECT 1 FROM assistant_documents newer
                     WHERE newer.item_id=d.item_id AND newer.rowid>d.rowid)
-                ORDER BY publication_rank(j.revision_id),json_extract(d.revision,'$.created_at') DESC,j.queued_at,j.id LIMIT 1""", (time.time(),)).fetchone()
+                ORDER BY publication_rank(j.revision_id),json_extract(d.revision,'$.created_at') DESC,j.queued_at,j.id LIMIT 1""", (time.time(), fingerprint, fingerprint)).fetchone()
             if row is None:
                 return None
             conn.execute("INSERT OR REPLACE INTO assistant_meta VALUES (?,?)", ('attempts:'+today, str(count+1)))
