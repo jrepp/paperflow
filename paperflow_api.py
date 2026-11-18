@@ -177,16 +177,16 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
                 "diagnostics": monitor.assistant.store.diagnostics(settings.assistant),
                 "schedule": {"interval_seconds": settings.assistant.interval_seconds,
                              "items_per_cycle": settings.assistant.items_per_cycle,
-                             "daily_attempt_limit": settings.assistant.daily_attempt_limit}}
+                             "rolling_token_limit": settings.assistant.rolling_token_limit}}
 
     @app.post('/api/monitor/curation/runs', response_model=CurationTrigger, status_code=202,
               operation_id='trigger_curation', tags=['curation'],
               summary='Trigger a bounded curation cycle',
               description='Wake the curator even when automatic scheduling is off. Repeated requests '
-              'coalesce with pending or active work. Retry backoff, daily attempt limits, and per-cycle '
+              'coalesce with pending or active work. Retry backoff, rolling token limits, and per-cycle '
               'intake still apply. This is an in-memory wake-up, not a durable job receipt. '
               'Poll the returned run-history and metrics URLs for outcomes and spend. '
-              'An empty queue or exhausted daily budget may produce no new run.')
+              'An empty queue or exhausted rolling token budget may produce no new run.')
     def trigger_curation():
         try:
             return monitor.trigger_curation()

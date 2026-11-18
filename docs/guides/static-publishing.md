@@ -92,7 +92,7 @@ counts, discussion links, and model curation when available. Missing counts rema
 absent; zero counts are displayed. Source excerpts are labeled separately from
 model summaries. Curation of an older source revision is explicitly identified.
 Items without a model analysis are labeled on the card. Selection does not wait
-for curation; a backlog, failed work, or the daily attempt limit can delay it.
+for curation; a backlog, failed work, or the rolling token limit can delay it.
 
 When the assistant is enabled and its database exists, both CLI and API builds
 include its latest successful public analysis: summary, findings, uncertainty,

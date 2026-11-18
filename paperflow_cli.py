@@ -36,6 +36,61 @@ app = typer.Typer(
 
 app.add_typer(topic_app, name='topics')
 
+curation_app = typer.Typer(no_args_is_help=True, help='Inspect and trigger model curation')
+
+
+@curation_app.callback()
+def curation_config(ctx: typer.Context, api_url: str = typer.Option('http://127.0.0.1:8000')):
+    from paperflow_api_client import APIClient
+    try:
+        ctx.obj = APIClient(api_url)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint='--api-url') from None
+
+
+def _curation_request(ctx, method, path):
+    from paperflow_api_client import APIError
+    try:
+        return ctx.obj.request(method, path)
+    except APIError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from None
+
+
+@curation_app.command('stats')
+def curation_stats(ctx: typer.Context, days: int = typer.Option(7, min=1, max=365),
+                   json_output: bool = typer.Option(False, '--json')):
+    """Report model usage and estimated cost over a rolling window of days."""
+    import json
+    data = _curation_request(ctx, 'GET', f'/api/monitor/curation?days={days}')
+    if json_output or not data.get('enabled'):
+        typer.echo(json.dumps(data, indent=2))
+        return
+    spend, diagnostics = data['spend'], data['diagnostics']
+    typer.echo(f"Last {days} days: {spend['input_tokens']:,} input, {spend['output_tokens']:,} output, "
+               f"{spend['cache_read_tokens']:,} cached input tokens")
+    typer.echo(f"Estimated cost: ${spend['estimated_usd']} USD; {spend['unpriced_requests']} unpriced requests")
+    typer.echo(f"Completed analyses: {spend['completed_jobs']}; retry cost: ${spend['retry_estimated_usd']}")
+    typer.echo(f"Queue: {diagnostics.get('queue_blocked_reason') or 'eligible'}; "
+               f"queued: {data['counts'].get('queued', 0)}; failed: {data['counts'].get('failed', 0)}")
+    if 'rolling_tokens_used' in diagnostics:
+        typer.echo(f"Rolling 24-hour budget: {diagnostics['rolling_tokens_used']:,} / "
+                   f"{diagnostics['rolling_token_limit']:,} tokens; "
+                   f"{diagnostics['rolling_unknown_usage_requests']} requests with unknown usage")
+    for model, usage in spend['by_role_and_model'].items():
+        typer.echo(f"  {model}: {usage['input_tokens']:,} input / {usage['output_tokens']:,} output, ${usage['estimated_usd']}")
+    typer.echo('Estimates are not billed charges; missing usage is unknown.')
+
+
+@curation_app.command('run')
+def curation_run(ctx: typer.Context):
+    """Request one bounded curation cycle."""
+    import json
+    typer.echo(json.dumps(_curation_request(ctx, 'POST', '/api/monitor/curation/runs'), indent=2))
+
+
+app.add_typer(curation_app, name='curation')
+
 radar_app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,

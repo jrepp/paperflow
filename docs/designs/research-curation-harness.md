@@ -109,7 +109,7 @@ existing worker pool. The curation interval defaults to 60 seconds.
 Revisions selected for the current publication take priority over historical work;
 assessment and curation alternate within each priority group. The public feed can
 still show source items before analysis completes: selection does not wait for the
-worker, and failures or the daily attempt limit can delay it. Each tick indexes at
+worker, and failures or the rolling token limit can delay it. Each tick indexes at
 most 10,000 new source revisions before it claims a model job.
 
 The reasoning key comes from `DS4_API_KEY` or the secret setting
@@ -118,7 +118,7 @@ The reasoning key comes from `DS4_API_KEY` or the secret setting
 file. Deployment must inject the selected values. Settings serialization excludes
 both key fields. Provider URLs and model IDs remain configurable.
 
-Default limits are 100 attempts per UTC day, 3 attempts per job, 12 model requests,
+Default limits are 20 million reported tokens over a rolling 24 hours, 3 attempts per job, 12 model requests,
 40 tool calls, 200,000 reported tokens, 16,000 output tokens per reasoning request,
 12 decision calls, and 3 decision layers.
 The reasoner has a 240-second timeout. Sampled evaluation has a separate 60-second
@@ -193,14 +193,17 @@ is incomplete when usage is missing. Costs and completions can cross the window
 boundary. Billed spend remains unknown without account billing reconciliation.
 
 Tune `research.assistant.interval_seconds`, `items_per_cycle`, and
-`daily_attempt_limit` together. The default is one item per 60-second cycle with
-at most 100 attempts per UTC day. One worker processes each cycle sequentially.
-An expensive cycle can take longer than its configured interval. The daily limit
-includes retries. Change `evaluation_sample_rate` to trade evaluation coverage
+`rolling_token_limit` together. One worker processes one item per 60-second cycle
+by default. The rolling limit sums reported input and output tokens from all roles,
+including retries; cached input is already included in input tokens. It is checked
+before a job, so an in-flight job can exceed it. Missing provider usage is unknown
+and cannot be counted. The deprecated `daily_attempt_limit` setting no longer gates
+work. An expensive cycle can take longer than its configured interval. Change `evaluation_sample_rate` to trade evaluation coverage
 against overhead, and compare quality estimates before reducing that coverage.
 
-The worker prioritizes the same balanced list of recent items selected for static
-publication. Before model work, it attempts bounded public content retrieval for
+The worker prioritizes papers within the recent items selected for static
+publication, followed by other sources. The decision model assesses source
+contributions before the reasoning model writes a substantive account. Before model work, it attempts bounded public content retrieval for
 one visible item per cycle, including items without a feed excerpt. Article/main
 HTML is extracted without navigation or scripts; arXiv links prefer paper HTML
 and fall back to PDF when unavailable. PDF extraction is limited to 100 pages.
