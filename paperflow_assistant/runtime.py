@@ -347,7 +347,8 @@ async def run_agent(context, item, reasoner, decision):
     @agent.output_validator
     def validate(ctx: RunContext[Context], output: Analysis) -> Analysis:
         try:
-            validate_analysis(output, ctx.deps.revision, settings, ctx.deps.storage, public_only=ctx.deps.public_analysis)
+            validate_analysis(output, ctx.deps.revision, settings, ctx.deps.storage, public_only=ctx.deps.public_analysis,
+                              pending=(ctx.deps.story_context or {}).get('pending', ()))
         except ValueError as exc:
             logger.warning(json.dumps({'event': 'curation.validation.failed', 'run_id': ctx.deps.job['id'],
                                        'reason': str(exc)}))
@@ -369,7 +370,7 @@ async def run_agent(context, item, reasoner, decision):
               'story_context': context.story_context}
     if context.story_context:
         prompt['task'] += (' Update the story account using the prior account and all supplied source evidence, '
-            'including each pending material contribution. Preserve still-supported findings and cite exact '
+            'including each pending material contribution. Cite each pending revision in the findings. Preserve still-supported findings and cite exact '
             'revision-bound passages for both prior and incoming evidence. Note uncertainty and corrections.')
     async with agent, context.decision_agent:
         result = await agent.run(json.dumps(prompt), deps=context, usage=context.usage,
@@ -465,6 +466,95 @@ class AssistantWorker:
                 priority.append(str(revision.id))
         return priority
 
+    def _assess_revision(self, context, item, start):
+        job = context.job
+        from paperflow_assistant.stories import (RULE_VERSION, AssessmentDecision, assess,
+                                                validate_decision, account_markdown)
+        from paperflow_story_models import Story, StoryAssessment, StoryFinding
+        from paperflow_story_vectors import semantic_candidates
+        with self.storage.transaction() as repo:
+            documents = [(story_id, text) for story_id, text in repo.story_documents()
+                         if all(repo.is_public_revision(a.revision_id) for a in repo.story_assessments(story_id=UUID(story_id)))]
+        semantic = semantic_candidates(item['title'] + '\n' + context.revision.markdown[:4000],
+            documents, index_path=self.settings.path.with_suffix('.stories.mv2'))
+        with self.storage.transaction() as repo:
+            candidates = []
+            for candidate in repo.story_candidates(context.revision.id, semantic_ids=semantic):
+                if any(not repo.is_public_revision(a.revision_id) for a in repo.story_assessments(story_id=candidate.story.id)):
+                    continue
+                story_data = candidate.story.model_dump(mode='json')
+                story_data['title'] = story_data['title'][:300]
+                story_data['account'] = story_data['account'][:1000]
+                data = {'story': story_data, 'matched': list(candidate.matched),
+                        'score': candidate.score, 'evidence': []}
+                # Keep the cheap assessment bounded even for stories with many sources.
+                for source in candidate.sources[:1]:
+                    source_revision = repo.get(ContentRevision, source.revision_id)
+                    if source_revision:
+                        data['evidence'].append({'revision_id': str(source_revision.id),
+                            'evidence_basis': source_revision.evidence_basis,
+                            'text': source_revision.markdown[:2000]})
+                candidates.append(data)
+            prior = [a for a in repo.story_assessments(revision_id=context.revision.id)
+                     if a.processor_version == fingerprint(self.settings) and a.rule_set_version == RULE_VERSION]
+        if prior:
+            assessment = prior[-1]
+        else:
+            if self.assessment_runner:
+                decision = AssessmentDecision.model_validate(self.assessment_runner(context, item, candidates))
+            else:
+                reasoner, _ = provider_models(self.settings)
+                decision = asyncio.run(assess(context, item, candidates, reasoner))
+            selected_hint = next((c for c in candidates if str(c['story']['id']) == str(decision.story_id)), None)
+            same_origin = selected_hint and any(x in ('item', 'canonical_url') for x in selected_hint['matched'])
+            if (decision.outcome != 'unresolved' and len(context.revision.markdown.split()) < 10
+                    and not (decision.outcome == 'repeated_coverage' and same_origin)):
+                decision = AssessmentDecision.model_validate({'outcome': 'unresolved', 'story_id': decision.story_id,
+                    'findings': [{'rule_id': 'insufficient-text', 'result': 'unresolved',
+                        'rationale': 'The source text is too short to establish its contribution.',
+                        'missing_evidence': 'A fuller source revision is needed.'}]})
+            try:
+                selected = validate_decision(decision, context.revision, candidates)
+            except ValueError as exc:
+                logger.warning(json.dumps({'event': 'story.assessment.validation_failed',
+                    'run_id': job['id'], 'reason': str(exc)}))
+                raise
+            findings = tuple(StoryFinding(rule_id=f.rule_id, rule_version=RULE_VERSION,
+                result=f.result, rationale=f.rationale, passages=tuple(f.passages),
+                missing_evidence=f.missing_evidence) for f in decision.findings)
+            assessment = StoryAssessment(revision_id=context.revision.id,
+                story_id=decision.story_id, story_version=selected['story']['version'] if selected else None,
+                outcome=decision.outcome, findings=findings, evidence_basis=context.revision.evidence_basis,
+                creator=self.settings.reasoning_model, creator_kind='processor',
+                processor_version=fingerprint(self.settings), rule_set_version=RULE_VERSION,
+                processing_run_id=uuid5(NAMESPACE_URL, job['id']))
+            with self.storage.transaction(write=True) as repo:
+                assessment = repo.apply_story_assessment(assessment,
+                    story=Story(title=item['title']) if decision.outcome == 'new_story' else None)
+        # Existing successful source analyses can seed a new story without another model run.
+        already_published = False
+        if assessment.outcome == 'new_story':
+            existing = self.store.analysis(item['id'])
+            if existing and existing['revision_id'] == str(context.revision.id):
+                existing_analysis = Analysis.model_validate(existing['analysis'])
+                try:
+                    validate_analysis(existing_analysis, context.revision, self.settings, self.storage, public_only=True)
+                except ValueError:
+                    existing = None
+            if existing and existing['revision_id'] == str(context.revision.id):
+                with self.storage.transaction(write=True) as repo:
+                    story = repo.get_story(assessment.story_id)
+                    pending = repo.story_pending(story.id)
+                    if len(pending) == 1 and pending[0].id == assessment.id:
+                        repo.publish_story(story.id, story.version, story.title,
+                            account_markdown(Analysis.model_validate(existing['analysis'])), [assessment.id],
+                            source_assessment_ids=[x.assessment_id for x in repo.story_sources(story.id)])
+                    already_published = bool(story.account) or len(pending) == 1 and pending[0].id == assessment.id
+        self.store.finish_story_job(job, assessment, usage_snapshot(context.usage), time.monotonic()-start,
+                                    already_published=already_published)
+        return {'id': job['id'], 'status': 'succeeded', 'stage': 'assessment',
+                'outcome': assessment.outcome, 'attempt': job['attempts']}
+
     def tick(self):
         priority = self.publication_priority()
         # Catch up the historical index before prioritizing fresh model work.
@@ -485,93 +575,9 @@ class AssistantWorker:
                               self.settings, None, RunUsage())
             with self.storage.transaction() as repo:
                 context.public_analysis = repo.is_public_revision(context.revision.id)
-            from paperflow_assistant.stories import (RULE_VERSION, AssessmentDecision, assess,
-                                                    validate_decision, account_markdown)
-            from paperflow_story_models import Story, StoryAssessment, StoryFinding
+            from paperflow_assistant.stories import account_markdown
             if self.store.story_job(job['id']):
-                from paperflow_story_vectors import semantic_candidates
-                with self.storage.transaction() as repo:
-                    documents = [(story_id, text) for story_id, text in repo.story_documents()
-                                 if all(repo.is_public_revision(a.revision_id) for a in repo.story_assessments(story_id=UUID(story_id)))]
-                semantic = semantic_candidates(item['title'] + '\n' + context.revision.markdown[:4000],
-                    documents, index_path=self.settings.path.with_suffix('.stories.mv2'))
-                with self.storage.transaction() as repo:
-                    candidates = []
-                    for candidate in repo.story_candidates(context.revision.id, semantic_ids=semantic):
-                        if any(not repo.is_public_revision(a.revision_id) for a in repo.story_assessments(story_id=candidate.story.id)):
-                            continue
-                        story_data = candidate.story.model_dump(mode='json')
-                        story_data['title'] = story_data['title'][:300]
-                        story_data['account'] = story_data['account'][:1000]
-                        data = {'story': story_data, 'matched': list(candidate.matched),
-                                'score': candidate.score, 'evidence': []}
-                        # Keep the cheap assessment bounded even for stories with many sources.
-                        for source in candidate.sources[:1]:
-                            source_revision = repo.get(ContentRevision, source.revision_id)
-                            if source_revision:
-                                data['evidence'].append({'revision_id': str(source_revision.id),
-                                    'evidence_basis': source_revision.evidence_basis,
-                                    'text': source_revision.markdown[:2000]})
-                        candidates.append(data)
-                    prior = [a for a in repo.story_assessments(revision_id=context.revision.id)
-                             if a.processor_version == fingerprint(self.settings) and a.rule_set_version == RULE_VERSION]
-                if prior:
-                    assessment = prior[-1]
-                else:
-                    if self.assessment_runner:
-                        decision = AssessmentDecision.model_validate(self.assessment_runner(context, item, candidates))
-                    else:
-                        reasoner, _ = provider_models(self.settings)
-                        decision = asyncio.run(assess(context, item, candidates, reasoner))
-                    selected_hint = next((c for c in candidates if str(c['story']['id']) == str(decision.story_id)), None)
-                    same_origin = selected_hint and any(x in ('item', 'canonical_url') for x in selected_hint['matched'])
-                    if (decision.outcome != 'unresolved' and len(context.revision.markdown.split()) < 10
-                            and not (decision.outcome == 'repeated_coverage' and same_origin)):
-                        decision = AssessmentDecision.model_validate({'outcome': 'unresolved', 'story_id': decision.story_id,
-                            'findings': [{'rule_id': 'insufficient-text', 'result': 'unresolved',
-                                'rationale': 'The source text is too short to establish its contribution.',
-                                'missing_evidence': 'A fuller source revision is needed.'}]})
-                    try:
-                        selected = validate_decision(decision, context.revision, candidates)
-                    except ValueError as exc:
-                        logger.warning(json.dumps({'event': 'story.assessment.validation_failed',
-                            'run_id': job['id'], 'reason': str(exc)}))
-                        raise
-                    findings = tuple(StoryFinding(rule_id=f.rule_id, rule_version=RULE_VERSION,
-                        result=f.result, rationale=f.rationale, passages=tuple(f.passages),
-                        missing_evidence=f.missing_evidence) for f in decision.findings)
-                    assessment = StoryAssessment(revision_id=context.revision.id,
-                        story_id=decision.story_id, story_version=selected['story']['version'] if selected else None,
-                        outcome=decision.outcome, findings=findings, evidence_basis=context.revision.evidence_basis,
-                        creator=self.settings.reasoning_model, creator_kind='processor',
-                        processor_version=fingerprint(self.settings), rule_set_version=RULE_VERSION,
-                        processing_run_id=uuid5(NAMESPACE_URL, job['id']))
-                    with self.storage.transaction(write=True) as repo:
-                        assessment = repo.apply_story_assessment(assessment,
-                            story=Story(title=item['title']) if decision.outcome == 'new_story' else None)
-                # Existing successful source analyses can seed a new story without another model run.
-                already_published = False
-                if assessment.outcome == 'new_story':
-                    existing = self.store.analysis(item['id'])
-                    if existing and existing['revision_id'] == str(context.revision.id):
-                        existing_analysis = Analysis.model_validate(existing['analysis'])
-                        try:
-                            validate_analysis(existing_analysis, context.revision, self.settings, self.storage, public_only=True)
-                        except ValueError:
-                            existing = None
-                    if existing and existing['revision_id'] == str(context.revision.id):
-                        with self.storage.transaction(write=True) as repo:
-                            story = repo.get_story(assessment.story_id)
-                            pending = repo.story_pending(story.id)
-                            if len(pending) == 1 and pending[0].id == assessment.id:
-                                repo.publish_story(story.id, story.version, story.title,
-                                    account_markdown(Analysis.model_validate(existing['analysis'])), [assessment.id],
-                                    source_assessment_ids=[x.assessment_id for x in repo.story_sources(story.id)])
-                            already_published = bool(story.account) or len(pending) == 1 and pending[0].id == assessment.id
-                self.store.finish_story_job(job, assessment, usage_snapshot(context.usage), time.monotonic()-start,
-                                            already_published=already_published)
-                return {'id': job['id'], 'status': 'succeeded', 'stage': 'assessment',
-                        'outcome': assessment.outcome, 'attempt': job['attempts']}
+                return self._assess_revision(context, item, start)
             route = self.store.story_for_revision(context.revision.id, job['fingerprint'])
             if route and route['story_id']:
                 with self.storage.transaction() as repo:
@@ -579,22 +585,21 @@ class AssistantWorker:
                     pending = repo.story_pending(story.id)
                     if any(not repo.is_public_revision(a.revision_id) for a in repo.story_assessments(story_id=story.id)):
                         raise ValueError('Story contains a revision without public provenance')
+                    members = repo.story_sources(story.id)
+                    revisions = dict.fromkeys([a.revision_id for a in pending] + [s.revision_id for s in members])
+                    remaining = self.settings.source_character_limit
                     sources = []
-                    for source in repo.story_sources(story.id):
-                        evidence = repo.get(ContentRevision, source.revision_id)
-                        if evidence:
-                            sources.append({'revision_id': str(evidence.id), 'evidence_basis': evidence.evidence_basis,
-                                            'text': evidence.markdown[:self.settings.source_character_limit]})
-                    included_ids = {entry['revision_id'] for entry in sources}
-                    for contribution in pending:
-                        if str(contribution.revision_id) not in included_ids:
-                            evidence = repo.get(ContentRevision, contribution.revision_id)
-                            if evidence:
-                                sources.append({'revision_id': str(evidence.id), 'evidence_basis': evidence.evidence_basis,
-                                                'text': evidence.markdown[:self.settings.source_character_limit]})
+                    for revision_id in revisions:
+                        evidence = repo.get(ContentRevision, revision_id)
+                        # The main prompt includes the incoming revision. Additional
+                        # source passages share one budget across the whole story.
+                        text = '' if revision_id == context.revision.id else evidence.markdown[:min(4000, remaining)]
+                        remaining -= len(text)
+                        sources.append({'revision_id': str(revision_id), 'evidence_basis': evidence.evidence_basis,
+                                        'text': text})
                     context.story_context = {'story': story.model_dump(mode='json'),
                         'pending': [x.model_dump(mode='json') for x in pending], 'sources': sources,
-                        'source_assessment_ids': [str(x.assessment_id) for x in repo.story_sources(story.id)]}
+                        'source_assessment_ids': [str(x.assessment_id) for x in members]}
             staged = self.store.staged_publication(job['id'])
             if staged and context.story_context and not context.story_context['pending']:
                 with self.storage.transaction() as repo:
@@ -612,7 +617,8 @@ class AssistantWorker:
                 output = asyncio.run(run_agent(context, item, reasoner, decision))
             # Injected runners obey the same validation boundary as live models.
             analysis = Analysis.model_validate(output[0])
-            validation = validate_analysis(analysis, context.revision, self.settings, self.storage, public_only=context.public_analysis)
+            validation = validate_analysis(analysis, context.revision, self.settings, self.storage, public_only=context.public_analysis,
+                                           pending=(context.story_context or {}).get('pending', ()))
             if context.story_context:
                 story = context.story_context['story']
                 self.store.stage_publication(job['id'], {'analysis': analysis.model_dump(mode='json'),

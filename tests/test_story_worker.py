@@ -65,7 +65,8 @@ def test_material_updates_coalesce_and_include_prior_evidence(tmp_path, monkeypa
         contexts.append(ctx.story_context)
         result = dict(output)
         result['findings'] = [{**output['findings'][0], 'citations': [
-            {'revision_id': str(ctx.revision.id), 'quote': ctx.revision.markdown, 'start': 0}]}]
+            {'revision_id': str(rev.id), 'quote': rev.markdown, 'start': 0},
+            {'revision_id': str(other_rev.id), 'quote': other_rev.markdown, 'start': 0}]}]
         return result, {}, {}, {}
     def assess(ctx, item, candidates):
         return decision('material_contribution', candidates[0]['story']['id'], ctx.revision.markdown) if candidates else decision('new_story', text=ctx.revision.markdown)
