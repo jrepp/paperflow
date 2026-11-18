@@ -440,6 +440,8 @@ def _card(item, card):
         parts.append('<div class="model-summary"><h3>Model analysis</h3><p>'
                      + esc(result['analysis']['summary']) + '</p><p class="muted">Evidence: '
                      + esc(result['analysis']['evidence_basis'].replace('_', ' ')) + '</p></div>')
+    if not result and not legacy:
+        parts.append('<p class="muted">Model curation unavailable.</p>')
     count = len(result['analysis']['findings']) if result else 0
     description = (str(count) + (' finding' if count == 1 else ' findings')) if result else 'Source details'
     parts += ['<details class="curation-card"><summary><span>Explore ' + esc(item.title)

@@ -16,6 +16,29 @@ from paperflow_domain import Item, ContentRevision
 from paperflow_curation import CurationService
 
 
+def test_publication_work_precedes_other_stage_backlog(tmp_path):
+    from paperflow_assistant.runtime import fingerprint
+
+    settings, storage, item, rev, _ = fixture(tmp_path)
+    other = CurationService(storage).add(Item(kind='article', title='Older item'))
+    other_rev = CurationService(storage).add(ContentRevision.from_markdown(
+        item_id=other.id, markdown='Older evidence.', evidence_basis='abstract'))
+    observe(storage, item)
+    observe(storage, other)
+    worker = AssistantWorker(settings)
+    worker.initialize()
+    worker.store.reconcile(storage, fingerprint(settings.assistant))
+    with worker.store.connection(True) as conn:
+        # Make historical curation eligible, and make the alternation prefer it.
+        conn.execute("UPDATE assistant_jobs SET status='succeeded' WHERE id IN "
+                     "(SELECT job_id FROM assistant_story_jobs WHERE revision_id=?)", (str(other_rev.id),))
+        conn.execute("UPDATE assistant_story_jobs SET outcome='new_story' WHERE revision_id=?", (str(other_rev.id),))
+        conn.execute("INSERT OR REPLACE INTO assistant_meta VALUES ('last_story_stage','assessment')")
+    job = worker.store.claim(3, priority_revisions=[str(rev.id)])
+    assert job['revision_id'] == str(rev.id)
+    assert worker.store.story_job(job['id']) is not None
+
+
 def decision(outcome, story_id=None, text=None):
     return {'outcome': outcome, 'story_id': story_id, 'findings': [
         {'rule_id': 'identity', 'result': outcome, 'rationale': 'Source comparison',

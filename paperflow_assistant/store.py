@@ -126,9 +126,10 @@ class AssistantStore:
                             AND (a.status!='succeeded' OR sj.outcome NOT IN ('new_story','material_contribution')))))
                 AND (EXISTS (SELECT 1 FROM assistant_story_jobs sj WHERE sj.revision_id=j.revision_id)
                      OR NOT EXISTS (SELECT 1 FROM assistant_documents newer WHERE newer.item_id=d.item_id AND newer.rowid>d.rowid))
-                ORDER BY stage_rank(EXISTS (SELECT 1 FROM assistant_story_jobs sj WHERE sj.job_id=j.id)),
+                ORDER BY (publication_rank(j.revision_id) >= ?),
+                stage_rank(EXISTS (SELECT 1 FROM assistant_story_jobs sj WHERE sj.job_id=j.id)),
                 publication_rank(j.revision_id), CASE WHEN EXISTS (SELECT 1 FROM assistant_story_jobs sj WHERE sj.job_id=j.id)
-                    THEN d.rowid ELSE -d.rowid END,j.queued_at,j.id LIMIT 1""", (time.time(), fingerprint, fingerprint)).fetchone()
+                    THEN d.rowid ELSE -d.rowid END,j.queued_at,j.id LIMIT 1""", (time.time(), fingerprint, fingerprint, len(priority))).fetchone()
             if row is None:
                 return None
             conn.execute("INSERT OR REPLACE INTO assistant_meta VALUES (?,?)", ('attempts:'+today, str(count+1)))
