@@ -303,7 +303,8 @@ def _story_row(row, now, anchors):
              '<p><a class="read-story" href="#story-account-' + str(story.id) + '">Read story</a></p>',
              '<details class="curation-card"><summary><span>Explore ' + esc(story.title) + '</span>'
              + '<span class="card-count">' + str(len(row['sources'])) + (' source' if len(row['sources']) == 1 else ' sources')
-             + '</span></summary><div class="curation-body"><ul>']
+             + '</span></summary><div class="curation-body">'
+             + _card_actions('story', story.id, story.version) + '<ul>']
     if row.get('pending'):
         parts.insert(4, '<p class="muted">This account is awaiting an update for new material.</p>')
     changes = [finding.rationale for entry in row["sources"] if entry["assessment"]
@@ -335,7 +336,7 @@ def _story_row(row, now, anchors):
         else:
             parts.append('<p class="muted">Contribution assessment unavailable.</p>')
         parts.append('</li>')
-    parts.append('</ul>' + _card_actions('story', story.id, story.version) + '</div></details>'
+    parts.append('</ul></div></details>'
                  '<p class="rating-receipt" hidden></p></article></li>')
     return ''.join(parts)
 
@@ -446,6 +447,8 @@ def _card(item, card):
     description = (str(count) + (' finding' if count == 1 else ' findings')) if result else 'Source details'
     parts += ['<details class="curation-card"><summary><span>Explore ' + esc(item.title)
              + '</span><span class="card-count">' + description + '</span></summary><div class="curation-body">']
+    version = result['run_id'] if result else card.get('legacy_run_id')
+    parts.append(_card_actions('item', item.id, version) if version else _card_actions())
     if links:
         parts.append('<div class="curation-links">' + ' · '.join(links) + '</div>')
         links = []
@@ -467,8 +470,6 @@ def _card(item, card):
     if links:
         parts.append('<div class="curation-links">' + ' · '.join(links) + '</div>')
     parts.append('<details class="source-metadata"><summary>Source details</summary><dl>' + ''.join('<div><dt>' + esc(k) + '</dt><dd>' + esc(v) + '</dd></div>' for k, v in metadata) + '</dl></details>')
-    version = result['run_id'] if result else card.get('legacy_run_id')
-    parts.append(_card_actions('item', item.id, version) if version else _card_actions())
     parts.append('</div></details>')
     return ''.join(parts)
 

@@ -245,6 +245,7 @@ button,.control,nav a,.brand { max-width:100%; overflow-wrap:anywhere; white-spa
 .curation-card > summary:hover { background:var(--tint); }
 .card-count { font-size:.75rem; font-weight:500; color:var(--muted); white-space:nowrap; }
 .card-actions { border-top:1px solid var(--line); display:flex; flex-wrap:wrap; gap:.5rem 1rem; align-items:center; padding-top:1rem; margin-top:1rem; }
+.curation-body > .card-actions:first-child { border-top:0; border-bottom:1px solid var(--line); padding:0 0 1rem; margin:0 0 1rem; }
 .card-rating { display:flex; align-items:center; flex-wrap:wrap; gap:.5rem; }
 .card-rating > span:first-child { font-weight:650; font-size:.875rem; }
 .card-rating button,.card-close { min-height:44px; padding:.5rem .8rem; font-size:.875rem; border:1px solid var(--accent); color:var(--accent); }

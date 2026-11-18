@@ -316,6 +316,7 @@ def test_real_story_publication_discloses_pending_contribution(tmp_path):
     build_site_from_storage(storage, out)
     page = (out / 'index.html').read_text()
     assert page.count(f'id="story-{story.id}"') == 1
+    assert '<div class="curation-body"><div class="card-actions"><div class="card-rating"' in page
     assert 'awaiting an update for new material' in page
     assert 'Original account' in page and 'Measurement corrected' in page
     assert 'https://example.org/feed/0' in page and 'https://example.org/feed/1' in page
