@@ -1,6 +1,7 @@
 """Choose exact source passages for the first reasoning turn on long documents."""
 import json
 import logging
+from typing import Literal
 
 from pydantic import Field
 from pydantic_ai import Agent
@@ -15,8 +16,11 @@ MAX_SELECTED = 5
 
 
 class EvidenceSelection(StrictModel):
-    block_ids: list[int] = Field(min_length=1, max_length=MAX_SELECTED,
-                                 description='Numbers of source blocks most useful for the analysis.')
+    block_ids: list[Literal['1', '2', '3', '4', '5', '6', '7', '8', '9', '10',
+                            '11', '12', '13', '14', '15', '16', '17', '18', '19', '20',
+                            '21', '22', '23', '24', '25', '26', '27', '28', '29', '30',
+                            '31', '32', '33']] = Field(
+        description='Which numbered blocks contain important methods, findings, uncertainty, or limitations?')
 
 
 async def select_evidence(context, decision_model, text):
@@ -35,9 +39,8 @@ async def select_evidence(context, decision_model, text):
                                      usage=context.usage,
                                      usage_limits=UsageLimits(request_limit=1, total_tokens_limit=context.settings.token_limit),
                                      timeout=context.settings.timeout_seconds)
-        chosen = result.output.block_ids
-        if any(i < 0 or i >= len(blocks) for i in chosen):
-            return None
+        chosen = [int(i) for i in result.output.block_ids]
+        chosen = [i for i in chosen if i < len(blocks)]
         ids = sorted({0, *chosen})[:MAX_SELECTED]
         if len(ids) < 3:
             return None

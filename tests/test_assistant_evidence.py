@@ -21,13 +21,13 @@ def test_selection_is_metered_exact_and_rejects_invalid_blocks(tmp_path):
         prompt = next(json.loads(part.content) for message in messages for part in message.parts
                       if isinstance(part, UserPromptPart))
         assert len(prompt['blocks']) == 6
-        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {'block_ids': [2, 4]})])
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {'block_ids': ['2', '4']})])
     ranges = asyncio.run(select_evidence(context, FunctionModel(choose), text))
     assert ranges == [(0, BLOCK_SIZE), (2*BLOCK_SIZE, 3*BLOCK_SIZE), (4*BLOCK_SIZE, 5*BLOCK_SIZE)]
     assert [text[a:b][0] for a, b in ranges] == ['0', '2', '4']
     assert worker.store.request_metrics('selection', 1)[0]['role'] == 'evidence_selection'
     def invalid(messages, info):
-        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {'block_ids': [99]})])
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {'block_ids': ['19']})])
     context.usage = RunUsage()
     assert asyncio.run(select_evidence(context, FunctionModel(invalid), text)) is None
     assert asyncio.run(select_evidence(context, FunctionModel(choose), 'short')) is None
@@ -63,3 +63,21 @@ def test_selected_passages_reach_reasoner_with_offsets_and_coverage_limits(tmp_p
         return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, output)])
     result = asyncio.run(run_agent(context, item.model_dump(mode='json'), FunctionModel(reason), TestModel()))
     assert result[0]['summary'] == output['summary']
+
+
+def test_evidence_selection_schema_reaches_typesafe_adapter(tmp_path, monkeypatch):
+    from pydantic_ai.models.typesafe import TypeSafeModel
+    from pydantic_ai.providers.typesafe import TypeSafeProvider
+    settings, storage, item, rev, _ = fixture(tmp_path)
+    worker = AssistantWorker(settings)
+    worker.initialize()
+    context = Context({'id': 'adapter', 'attempts': 1}, rev, storage, worker.store,
+                      settings.assistant, None, RunUsage())
+    model = TypeSafeModel('jev-1.14.0', provider=TypeSafeProvider(api_key='test-key'))
+    calls = []
+    async def stop_before_network(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise RuntimeError('stop before network')
+    monkeypatch.setattr(model.client, 'system_one', stop_before_network)
+    assert asyncio.run(select_evidence(context, model, 'source ' * 5000)) is None
+    assert calls, 'TypeSafe must accept the selector schema before reaching the transport'
