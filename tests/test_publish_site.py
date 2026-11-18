@@ -66,6 +66,9 @@ def test_site_renders_channels_with_decay_and_manifest(tmp_path: Path) -> None:
     assert "<style>" + stylesheet + "</style>" in page
     assert '<link rel="stylesheet"' not in page
     assert '<main id="main" class="shell py-8" tabindex="-1">' in page
+    assert page.count('<h1>Latest Stories</h1>') == 1
+    assert '<summary>How stories are selected</summary>' in page
+    assert 'up to 2 recent items per source from the past 7 days' in page
     assert '<a class="skip" href="#main">' in page
     assert "<a href=\"https://news.ycombinator.com/rss/0\">Fresh news item</a>" in page
     stored = json.loads((out / "build.json").read_text(encoding="utf-8"))

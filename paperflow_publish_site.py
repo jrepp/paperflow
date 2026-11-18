@@ -541,6 +541,10 @@ def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None =
     # Embed the same packaged stylesheet as the interactive reader so published
     # bundles work offline and never depend on a live application's asset route.
     stylesheet = files("paperflow_reader").joinpath("static/reader.css").read_text(encoding="utf-8")
+    hours = manifest['policy']['window_hours']
+    amount, unit = (hours // 24, 'day') if hours % 24 == 0 else (hours, 'hour')
+    window = f"{amount} {unit}{'s' if amount != 1 else ''}"
+    limit = manifest['policy']['per_channel_limit']
     parts = [
         '<!doctype html><html lang="en"><head>',
         '<meta charset="utf-8">',
@@ -556,6 +560,11 @@ def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None =
         '<p>Ratings use a private browser identifier to count repeat votes once. The service hashes your IP address '
         'and browser request headers and stores the rating identifier without the raw inputs.</p></details></div></header>',
         '<main id="main" class="shell py-8" tabindex="-1">',
+        '<h1>Latest Stories</h1>',
+        '<details class="rating-privacy"><summary>How stories are selected</summary>'
+        f'<p>The feed selects up to {limit} recent items per source from the past {window}, '
+        'using the publication date when available. Stories appear when at least one of their sources '
+        'is selected. Curation can draw on older related sources, and stories may leave this feed as the window moves.</p></details>',
         '<div class="sr-status" id="rating-announcement" role="status" aria-live="polite"></div>',
     ]
     if latest or stories:
