@@ -99,12 +99,27 @@ class AssistantStore:
                 conn.execute("INSERT OR IGNORE INTO assistant_story_jobs (job_id,revision_id) VALUES (?,?)", (assessment_id, doc[0]))
         return len(rows)
 
-    def claim(self, max_attempts, daily_attempt_limit=100, priority_revisions=(), fingerprint=None):
+    @staticmethod
+    def _token_window(conn, now):
+        rows = conn.execute("SELECT started_at,payload FROM assistant_requests WHERE started_at>? ORDER BY started_at", (now-86400,)).fetchall()
+        used = missing = 0
+        expiry = None
+        for row in rows:
+            payload = json.loads(row['payload']) if row['payload'] else {}
+            usage = payload.get('usage')
+            if usage is None:
+                missing += 1
+                continue
+            tokens = usage.get('input_tokens', 0) + usage.get('output_tokens', 0)
+            used += tokens
+            if tokens and expiry is None:
+                expiry = row['started_at'] + 86400
+        return used, missing, expiry
+
+    def claim(self, max_attempts, rolling_token_limit=20000000, priority_revisions=(), fingerprint=None):
         with self.connection(True) as conn:
-            today = datetime.now(UTC).date().isoformat()
-            daily = conn.execute("SELECT value FROM assistant_meta WHERE key=?", ('attempts:'+today,)).fetchone()
-            count = int(daily[0]) if daily else 0
-            if count >= daily_attempt_limit:
+            used, _, _ = self._token_window(conn, time.time())
+            if used >= rolling_token_limit:
                 return None
             conn.execute("UPDATE assistant_jobs SET status='failed',error='AttemptsExhausted' WHERE status='queued' AND attempts>=?", (max_attempts,))
             priority = {str(rev): rank for rank, rev in enumerate(priority_revisions)}
@@ -127,12 +142,12 @@ class AssistantStore:
                 AND (EXISTS (SELECT 1 FROM assistant_story_jobs sj WHERE sj.revision_id=j.revision_id)
                      OR NOT EXISTS (SELECT 1 FROM assistant_documents newer WHERE newer.item_id=d.item_id AND newer.rowid>d.rowid))
                 ORDER BY (publication_rank(j.revision_id) >= ?),
+                CASE WHEN d.kind='paper' THEN 0 ELSE 1 END,
                 stage_rank(EXISTS (SELECT 1 FROM assistant_story_jobs sj WHERE sj.job_id=j.id)),
                 publication_rank(j.revision_id), CASE WHEN EXISTS (SELECT 1 FROM assistant_story_jobs sj WHERE sj.job_id=j.id)
                     THEN d.rowid ELSE -d.rowid END,j.queued_at,j.id LIMIT 1""", (time.time(), fingerprint, fingerprint, len(priority))).fetchone()
             if row is None:
                 return None
-            conn.execute("INSERT OR REPLACE INTO assistant_meta VALUES (?,?)", ('attempts:'+today, str(count+1)))
             stage = 'assessment' if conn.execute('SELECT 1 FROM assistant_story_jobs WHERE job_id=?', (row['id'],)).fetchone() else 'curation'
             conn.execute("INSERT OR REPLACE INTO assistant_meta VALUES ('last_story_stage',?)", (stage,))
             conn.execute("UPDATE assistant_jobs SET status='running',attempts=attempts+1,started_at=?,error=NULL,usage=NULL,finished_at=NULL,duration=NULL WHERE id=?", (time.time(), row['id']))
@@ -181,12 +196,11 @@ class AssistantStore:
             row = conn.execute("SELECT payload FROM assistant_story_publications WHERE job_id=?", (job_id,)).fetchone()
             return json.loads(row[0]) if row else None
 
-    def reserve_content_fetch(self, item_id, daily_attempt_limit):
+    def reserve_content_fetch(self, item_id, rolling_token_limit):
         """Persist a cooldown so inaccessible sources cannot monopolize the worker."""
         with self.connection(True) as conn:
-            today = datetime.now(UTC).date().isoformat()
-            daily = conn.execute("SELECT value FROM assistant_meta WHERE key=?", ('attempts:'+today,)).fetchone()
-            if daily and int(daily[0]) >= daily_attempt_limit:
+            used, _, _ = self._token_window(conn, time.time())
+            if used >= rolling_token_limit:
                 return False
             key = 'content-fetch:' + str(item_id)
             row = conn.execute("SELECT value FROM assistant_meta WHERE key=?", (key,)).fetchone()
@@ -410,11 +424,10 @@ class AssistantStore:
 
     def diagnostics(self, settings):
         now = time.time()
-        today = datetime.fromtimestamp(now, UTC).date().isoformat()
         with self.connection() as conn:
             rows = conn.execute("SELECT job_id,attempt,status,finished_at,error,usage FROM assistant_attempts WHERE finished_at>=? ORDER BY finished_at DESC", (now-86400,)).fetchall()
             last_success = conn.execute("SELECT MAX(finished_at) FROM assistant_attempts WHERE status='succeeded'").fetchone()[0]
-            used = conn.execute("SELECT value FROM assistant_meta WHERE key=?", ('attempts:'+today,)).fetchone()
+            used, missing_usage, expiry = self._token_window(conn, now)
             next_job = conn.execute("SELECT MIN(available_at) FROM assistant_jobs WHERE status='queued' AND attempts<?", (settings.max_attempts,)).fetchone()[0]
         groups, recent, consecutive = {}, [], 0
         for row in rows:
@@ -431,16 +444,14 @@ class AssistantStore:
             if row['status'] != 'failed':
                 break
             consecutive += 1
-        used = int(used[0]) if used else 0
-        blocked = 'empty' if next_job is None else 'daily_limit' if used >= settings.daily_attempt_limit else 'retry_backoff' if next_job > now else None
-        reset_at = now-now%86400+86400
-        if blocked == 'daily_limit':
-            next_job = max(next_job, reset_at)
+        blocked = 'empty' if next_job is None else 'token_limit' if used >= settings.rolling_token_limit else 'retry_backoff' if next_job > now else None
+        if blocked == 'token_limit' and expiry is not None:
+            next_job = max(next_job, expiry)
         return {'window_hours': 24, 'failed_attempts': sum(groups.values()),
                 'completed_attempts': len(rows), 'failure_groups': groups, 'recent_failures': recent,
                 'consecutive_failures_in_window': consecutive, 'last_success_at': last_success,
-                'daily_attempts_used': used, 'daily_attempt_limit': settings.daily_attempt_limit,
-                'daily_reset_at': reset_at,
+                'rolling_tokens_used': used, 'rolling_token_limit': settings.rolling_token_limit,
+                'rolling_unknown_usage_requests': missing_usage, 'rolling_next_expiry_at': expiry,
                 'next_eligible_at': next_job, 'queue_blocked_reason': blocked,
                 'legacy_note': 'Historical exception types without diagnostics have unknown exact limits.'}
 

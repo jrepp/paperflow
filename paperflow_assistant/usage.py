@@ -40,8 +40,8 @@ class MeteredModel(WrapperModel):
         ctx = self.context
         request_id = str(uuid4())
         started = time.time()
-        prices = ctx.settings.reasoning_prices if self.role in ('reasoning', 'story_assessment') else ctx.settings.decision_prices
-        requested = ctx.settings.reasoning_model if self.role in ('reasoning', 'story_assessment') else ctx.settings.decision_model
+        prices = ctx.settings.reasoning_prices if self.role == 'reasoning' else ctx.settings.decision_prices
+        requested = ctx.settings.reasoning_model if self.role == 'reasoning' else ctx.settings.decision_model
         ctx.store.start_request(request_id, ctx.job['id'], ctx.job['attempts'], self.role, requested, started)
         logger.info(json.dumps({'event': 'curation.request.started', 'run_id': ctx.job['id'],
             'attempt': ctx.job['attempts'], 'request_id': request_id, 'role': self.role, 'model': requested}))

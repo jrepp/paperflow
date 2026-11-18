@@ -442,13 +442,14 @@ class AssistantWorker:
                 observation = repo.latest_for_item(SourceObservation, item_id)
                 trusted = bool(revision and repo.is_public_revision(revision.id))
                 candidates.append((item, revision, observation, trusted))
+        candidates.sort(key=lambda candidate: candidate[0].kind != 'paper')
         fetched = False
         priority = []
         for item, revision, observation, trusted in candidates:
             if (not fetched and item.kind in ('paper', 'article', 'discussion')
                     and (not trusted or revision is None or (revision.evidence_basis != 'full_text'
                          and revision.processor_version != 'public-content-v1'))
-                    and self.store.reserve_content_fetch(item.id, self.settings.daily_attempt_limit)):
+                    and self.store.reserve_content_fetch(item.id, self.settings.rolling_token_limit)):
                 url = str(observation.entry.url if observation else item.canonical_url or '')
                 if url:
                     fetched = True
@@ -505,8 +506,8 @@ class AssistantWorker:
             if self.assessment_runner:
                 decision = AssessmentDecision.model_validate(self.assessment_runner(context, item, candidates))
             else:
-                reasoner, _ = provider_models(self.settings)
-                decision = asyncio.run(assess(context, item, candidates, reasoner))
+                _, decision_model = provider_models(self.settings)
+                decision = asyncio.run(assess(context, item, candidates, decision_model))
             selected_hint = next((c for c in candidates if str(c['story']['id']) == str(decision.story_id)), None)
             same_origin = selected_hint and any(x in ('item', 'canonical_url') for x in selected_hint['matched'])
             if (decision.outcome != 'unresolved' and len(context.revision.markdown.split()) < 10
@@ -571,7 +572,7 @@ class AssistantWorker:
             assessment = StoryAssessment(revision_id=context.revision.id,
                 story_id=decision.story_id, story_version=selected['story']['version'] if selected else None,
                 outcome=decision.outcome, findings=findings, evidence_basis=context.revision.evidence_basis,
-                creator=self.settings.reasoning_model, creator_kind='processor',
+                creator=self.settings.decision_model, creator_kind='processor',
                 processor_version=fingerprint(self.settings), rule_set_version=RULE_VERSION,
                 processing_run_id=uuid5(NAMESPACE_URL, job['id']))
             with self.storage.transaction(write=True) as repo:
@@ -608,7 +609,7 @@ class AssistantWorker:
         for _ in range(50):
             if self.store.reconcile(self.storage, fingerprint(self.settings)) < 200:
                 break
-        job = self.store.claim(self.settings.max_attempts, self.settings.daily_attempt_limit, priority, fingerprint(self.settings))
+        job = self.store.claim(self.settings.max_attempts, self.settings.rolling_token_limit, priority, fingerprint(self.settings))
         if job is None:
             return None
         start = time.monotonic()

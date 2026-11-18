@@ -248,6 +248,13 @@ available in API-only mode. Research query counts do not include MonitorStore SQ
 
 ## Agent-triggered research curation
 
+Use `paperflow curation --api-url http://127.0.0.1:8000 stats --days 7` to
+inspect rolling token usage, estimated cost, and queue status. Add `--json` for
+the complete report, including daily and model breakdowns. Change `--days` to
+compare windows from 1 to 365 days. The `paperflow curation run` command requests
+one bounded cycle; inspect stats afterwards
+to see whether the queue is blocked. Token prices are estimates, not invoices.
+
 Agents can discover `trigger_curation` in `/openapi.json` or `/docs` and request
 one cycle without restarting the service:
 
@@ -268,8 +275,8 @@ This is an in-memory wake-up, not a durable job receipt. A restart can discard a
 pending wake-up; agents may safely retry. Repeated requests share pending or active
 work and never create concurrent curator workers or queue extra cycles behind an
 active cycle. No SIGHUP handler is installed. The configured `items_per_cycle`,
-daily attempt cap, model budgets, and retry backoff still apply. An empty eligible
-queue or exhausted daily cap produces no new run. Completed revisions are not
+rolling token cap, model budgets, and retry backoff still apply. An empty eligible
+queue or exhausted rolling token cap produces no new run. Completed revisions are not
 reprocessed. Poll the returned URLs for durable outcomes, quality flags, and
 estimated spend; HTTP 202 does not assert that an analysis completed or passed
 quality checks. Internal research notes remain private.
@@ -305,8 +312,8 @@ This separation does not turn failed analyses into successful work or quality pa
 
 `GET /api/monitor/curation` includes a 24-hour diagnostic summary: failures grouped
 by exception and limit, recent detailed failures, consecutive failures in the
-window, last success, UTC daily attempts used, and queue blocking reason (daily
-cap, retry backoff, or no eligible work). The Sources panel displays these details.
+window, last success, rolling token usage and missing usage, and queue blocking
+reason (token cap, retry backoff, or no eligible work). The Sources panel displays these details.
 Older failures have no exact limit recorded and are labeled unknown.
 
 New attempt receipts record the failed limit, its configured value, observed or
