@@ -264,6 +264,91 @@ Citation edges are factual source relationships. Evidence assessments are
 interpretations. Similarity, citation count, community votes, and inclusion in
 a bibliography do not automatically create a support edge.
 
+## Proposed story and assessment model
+
+A Story is the published account of one event or research finding. It has a
+stable ID and versioned editorial text. A Source on a story refers to an
+existing Item and the exact ContentRevision assessed. SourceObservation records
+retain channel and discussion provenance. A Topic can contain several stories.
+
+A StoryAssessment records what a source revision contributes to a story at a
+particular point in time. EvidenceAssessment continues to express a source's
+stance toward a particular Claim. An assessment can point to those records
+when its judgment relies on reviewed claims.
+
+| Record | Information to retain |
+| --- | --- |
+| Story | Stable ID, title, creation time, current published version |
+| Story version | Story ID, version, account, time of material change, cited revisions and assessments |
+| Story source | Story ID, item ID, current assessment, first attached time |
+| Story assessment | Input revision, candidate story and version if present, outcome, findings, evidence basis, author or processor attribution, rule set version, optional prior assessment |
+| Assessment finding | Stable rule ID and version, result, short rationale, revision-bound passages or an explicit description of missing evidence |
+
+### Assessment rules and actions
+
+First determine whether the incoming source covers the same event or finding.
+Then compare its contribution with the cited evidence in the current account.
+Record each applicable finding. A single source may repeat a headline and
+correct a measurement. The correction warrants an update.
+
+| Outcome | Initial rule | Action |
+| --- | --- | --- |
+| New story | Sufficient source material identifies a distinct event or finding | Create a story, attach the source, and queue initial curation |
+| Repeated coverage | The account already covers the substantive content, including material traced to a shared origin | Attach the source and preserve the analysis and feed position |
+| Material contribution | Independent evidence, a correction, a qualification, or a challenge warrants revising the account or its stated confidence | Attach the source and queue an update citing the changed passage |
+| Unresolved | The available text or candidate evidence leaves identity or contribution uncertain | Retain the assessment and seek fuller text or editorial review |
+
+Treat the four outcomes as routing decisions. Extend the reasoning through
+versioned rules within those outcomes. For example, a new rule for a corrected
+benchmark denominator can produce a material-contribution finding using the
+existing update path. Preserve the rule version and rationale used at the time.
+A later review appends an assessment and links its predecessor. On retry, reuse
+the decision for the same inputs, story version, and processor configuration.
+Recheck the story version before applying a decision. Combine outstanding
+material contributions into one curation job.
+
+### Candidate retrieval
+
+Index the story ID and version, headline, short account of what happened,
+participants, event date when known, and distinguishing identifiers. Add the
+titles and informative passages of selected sources, including corrections.
+Collapse hits by story so syndicated copies cannot consume the shortlist.
+Combine exact DOI, arXiv ID, and canonical source link lookup with lexical and
+vector retrieval. Use recency to rank candidates while allowing late corrections
+to retrieve older stories.
+
+The proposed curator tool accepts an input revision and returns candidate story
+IDs, versions, matched identifiers or passages, and the current account with its
+source citations. A shared link or high similarity is a reason to inspect a
+candidate. Two papers may cite the same benchmark while reporting distinct
+findings. A correction may describe the same finding in very different language.
+An unavailable or out-of-date index leaves the assessment pending when fallback
+retrieval cannot establish adequate coverage.
+
+Keep stories, assessments, and memberships in the research database. A Memvid
+file is a candidate for a rebuildable search index. Index a new story as soon
+as it has a source, including while its first curation is pending. A single
+writer can replay committed changes. Resolve each hit against the current
+database version before assessment. Record the embedding model, dimension,
+and text preparation version so a replacement index can be built and checked
+before switching readers.
+
+### Publication and evaluation
+
+Latest shows one card per story, ordered by its last material change. Expanding
+Sources shows each source link, its contribution, and the basis for that
+judgment. For a correction, show what changed with a link to the passage. Keep
+candidate ranks and model diagnostics in the curator view. The static build
+reads the committed projection.
+
+Replay sources in arrival order against only the stories available at each
+arrival. Compare exact and lexical retrieval with the addition of vector
+retrieval. Measure how often the correct prior story appears in the first five
+candidates. Evaluate wrong attachments and missed material changes separately
+from full curation runs saved. Include syndicated copies, independent
+confirmation, later corrections, different events involving the same actors,
+and excerpts too thin to assess.
+
 ## Article-to-paper investigation
 
 1. Save an article into a bucket and optionally select a passage or claim.
