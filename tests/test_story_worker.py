@@ -352,6 +352,9 @@ def test_story_assessment_uses_reasoning_model(tmp_path, monkeypatch):
         seen.append(model)
         return AssessmentDecision.model_validate(decision('new_story', text=context.revision.markdown))
     monkeypatch.setattr('paperflow_assistant.stories.assess', assess)
+    async def no_category(*args):
+        return None
+    monkeypatch.setattr('paperflow_assistant.stories.choose_category', no_category)
     worker = AssistantWorker(settings, runner=runner(output))
     worker.initialize()
     assert worker.tick()['outcome'] == 'new_story'
@@ -389,3 +392,43 @@ def test_decision_classification_feeds_topic_selection(tmp_path, monkeypatch):
     proposals = AssistantTopicCurator(worker.store).propose([candidate, other], TopicSettings())
     assert len(proposals) == 1 and proposals[0].key == 'assistant:computing'
     assert {a.item_id for a in proposals[0].assignments} == {item.id, second.id}
+
+
+def test_topic_category_schema_reaches_typesafe_adapter(tmp_path, monkeypatch):
+    import asyncio
+    from pydantic_ai.models.typesafe import TypeSafeModel
+    from pydantic_ai.providers.typesafe import TypeSafeProvider
+    from pydantic_ai.usage import RunUsage
+    from paperflow_assistant.runtime import Context
+    from paperflow_assistant.stories import choose_category
+    settings, storage, item, rev, _ = fixture(tmp_path)
+    worker = AssistantWorker(settings)
+    worker.initialize()
+    context = Context({'id': 'adapter', 'attempts': 1}, rev, storage, worker.store,
+                      settings.assistant, None, RunUsage())
+    model = TypeSafeModel('jev-1.14.0', provider=TypeSafeProvider(api_key='test-key'))
+    calls = []
+    async def stop_before_network(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise RuntimeError('stop before network')
+    monkeypatch.setattr(model.client, 'system_one', stop_before_network)
+    assert asyncio.run(choose_category(context, item.model_dump(mode='json'), model)) is None
+    assert calls, 'TypeSafe must accept the category schema before transport'
+
+
+def test_topic_category_is_limited_to_configured_choices(tmp_path):
+    import asyncio
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.usage import RunUsage
+    from paperflow_assistant.runtime import Context
+    from paperflow_assistant.stories import choose_category
+    settings, storage, item, rev, _ = fixture(tmp_path)
+    worker = AssistantWorker(settings)
+    worker.initialize()
+    context = Context({'id': 'classification', 'attempts': 1}, rev, storage, worker.store,
+                      settings.assistant, None, RunUsage())
+    def respond(messages, info):
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {'category': 'computing'})])
+    assert asyncio.run(choose_category(context, item.model_dump(mode='json'), FunctionModel(respond))) == 'computing'
+    assert worker.store.request_metrics('classification', 1)[0]['role'] == 'topic_classification'

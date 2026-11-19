@@ -470,7 +470,7 @@ class AssistantWorker:
 
     def _assess_revision(self, context, item, start):
         job = context.job
-        from paperflow_assistant.stories import (RULE_VERSION, AssessmentDecision, AssessmentFinding,
+        from paperflow_assistant.stories import (RULE_VERSION, AssessmentDecision, AssessmentFinding, choose_category,
                                                 RepeatReview, assess, review_repeat,
                                                 validate_decision, account_markdown)
         from paperflow_story_models import Story, StoryAssessment, StoryFinding
@@ -506,8 +506,10 @@ class AssistantWorker:
             if self.assessment_runner:
                 decision = AssessmentDecision.model_validate(self.assessment_runner(context, item, candidates))
             else:
-                reasoner, _ = provider_models(self.settings)
+                reasoner, decision_model = provider_models(self.settings)
                 decision = asyncio.run(assess(context, item, candidates, reasoner))
+                category = asyncio.run(choose_category(context, item, decision_model))
+                decision = decision.model_copy(update={'category': category})
             selected_hint = next((c for c in candidates if str(c['story']['id']) == str(decision.story_id)), None)
             same_origin = selected_hint and any(x in ('item', 'canonical_url') for x in selected_hint['matched'])
             if (decision.outcome != 'unresolved' and len(context.revision.markdown.split()) < 10
@@ -572,6 +574,7 @@ class AssistantWorker:
             assessment = StoryAssessment(revision_id=context.revision.id,
                 story_id=decision.story_id, story_version=selected['story']['version'] if selected else None,
                 outcome=decision.outcome, category=decision.category if decision.category in self.settings.categories else None,
+                category_model=self.settings.decision_model if decision.category in self.settings.categories else None,
                 findings=findings, evidence_basis=context.revision.evidence_basis,
                 creator=self.settings.reasoning_model, creator_kind='processor',
                 processor_version=fingerprint(self.settings), rule_set_version=RULE_VERSION,
