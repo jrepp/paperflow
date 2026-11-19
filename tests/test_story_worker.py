@@ -352,7 +352,83 @@ def test_story_assessment_uses_reasoning_model(tmp_path, monkeypatch):
         seen.append(model)
         return AssessmentDecision.model_validate(decision('new_story', text=context.revision.markdown))
     monkeypatch.setattr('paperflow_assistant.stories.assess', assess)
+    async def no_category(*args):
+        return None
+    monkeypatch.setattr('paperflow_assistant.stories.choose_category', no_category)
     worker = AssistantWorker(settings, runner=runner(output))
     worker.initialize()
     assert worker.tick()['outcome'] == 'new_story'
     assert seen == [reasoning_model]
+
+
+def test_decision_classification_feeds_topic_selection(tmp_path, monkeypatch):
+    from paperflow_assistant.topics import AssistantTopicCurator
+    from paperflow_topic_models import TopicCandidate, TopicSettings
+    monkeypatch.setattr('paperflow_story_vectors.semantic_candidates', lambda *args, **kwargs: [])
+    settings, storage, item, rev, output = fixture(tmp_path)
+    observe(storage, item)
+    def classify(ctx, source, candidates):
+        return {**decision('new_story', text=ctx.revision.markdown), 'category': 'computing'}
+    worker = AssistantWorker(settings, runner=runner(output), assessment_runner=classify)
+    worker.initialize()
+    assert worker.tick()['outcome'] == 'new_story'
+    assert worker.store.classification(item.id)['category'] == 'computing'
+    with storage.transaction() as repo:
+        assessment = repo.story_assessments(revision_id=rev.id)[0]
+        observation = repo.latest_for_item(SourceObservation, item.id)
+    assert assessment.category == 'computing'
+    candidate = TopicCandidate(item_id=item.id, observation_id=observation.id,
+        first_seen_at=observation.observed_at, title=item.title, excerpt=rev.markdown, channel='test')
+    # Topic settings require two members, so use a second independent candidate.
+    second = CurationService(storage).add(Item(kind='paper', title='Other paper'))
+    second_rev = CurationService(storage).add(ContentRevision.from_markdown(item_id=second.id, markdown=rev.markdown))
+    observe(storage, second)
+    assert worker.tick()['status'] == 'succeeded'  # Curate the first story.
+    assert worker.tick()['outcome'] == 'new_story'
+    with storage.transaction() as repo:
+        second_observation = repo.latest_for_item(SourceObservation, second.id)
+    other = TopicCandidate(item_id=second.id, observation_id=second_observation.id,
+        first_seen_at=second_observation.observed_at, title=second.title, excerpt=second_rev.markdown, channel='test')
+    proposals = AssistantTopicCurator(worker.store).propose([candidate, other], TopicSettings())
+    assert len(proposals) == 1 and proposals[0].key == 'assistant:computing'
+    assert {a.item_id for a in proposals[0].assignments} == {item.id, second.id}
+
+
+def test_topic_category_schema_reaches_typesafe_adapter(tmp_path, monkeypatch):
+    import asyncio
+    from pydantic_ai.models.typesafe import TypeSafeModel
+    from pydantic_ai.providers.typesafe import TypeSafeProvider
+    from pydantic_ai.usage import RunUsage
+    from paperflow_assistant.runtime import Context
+    from paperflow_assistant.stories import choose_category
+    settings, storage, item, rev, _ = fixture(tmp_path)
+    worker = AssistantWorker(settings)
+    worker.initialize()
+    context = Context({'id': 'adapter', 'attempts': 1}, rev, storage, worker.store,
+                      settings.assistant, None, RunUsage())
+    model = TypeSafeModel('jev-1.14.0', provider=TypeSafeProvider(api_key='test-key'))
+    calls = []
+    async def stop_before_network(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise RuntimeError('stop before network')
+    monkeypatch.setattr(model.client, 'system_one', stop_before_network)
+    assert asyncio.run(choose_category(context, item.model_dump(mode='json'), model)) is None
+    assert calls, 'TypeSafe must accept the category schema before transport'
+
+
+def test_topic_category_is_limited_to_configured_choices(tmp_path):
+    import asyncio
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.usage import RunUsage
+    from paperflow_assistant.runtime import Context
+    from paperflow_assistant.stories import choose_category
+    settings, storage, item, rev, _ = fixture(tmp_path)
+    worker = AssistantWorker(settings)
+    worker.initialize()
+    context = Context({'id': 'classification', 'attempts': 1}, rev, storage, worker.store,
+                      settings.assistant, None, RunUsage())
+    def respond(messages, info):
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {'category': 'computing'})])
+    assert asyncio.run(choose_category(context, item.model_dump(mode='json'), FunctionModel(respond))) == 'computing'
+    assert worker.store.request_metrics('classification', 1)[0]['role'] == 'topic_classification'
