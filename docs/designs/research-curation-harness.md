@@ -203,8 +203,9 @@ against overhead, and compare quality estimates before reducing that coverage.
 
 The worker prioritizes papers within the recent items selected for static
 publication, followed by other sources. The reasoning model assesses source
-contributions and writes substantive accounts; the decision model selects an
-allowed topic category and performs bounded evidence and repeat-coverage judgments.
+contributions and writes substantive accounts; a separate metered decision-model
+call selects an allowed topic category. The decision model also performs bounded
+evidence and repeat-coverage judgments.
 The topic curator uses the latest revision's decision-model category when available
 and falls back to completed analysis for older work. Uncertain categories can
 remain unassigned. Before model work, it attempts bounded public content retrieval for
@@ -215,7 +216,7 @@ Retrieved content is stored as an immutable revision, so model citations refer
 to the text actually read. Generic article HTML remains labeled excerpt because
 markup alone cannot establish complete access. Missing or inaccessible content
 preserves the original evidence and receives a one-day fetch cooldown. Content
-retrieval respects the daily model-attempt budget. Superseded source revisions
+retrieval respects the rolling token budget. Superseded source revisions
 are not selected for new model attempts. Static builds remain read-only and do
 not fetch content or call models. Historical search currently indexes source revisions.
 The initial source window includes up to 120,000 characters. The prompt identifies
