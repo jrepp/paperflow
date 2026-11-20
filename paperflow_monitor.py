@@ -16,6 +16,7 @@ from opentelemetry.trace import Status, StatusCode
 
 from paperflow_http import get_bytes
 from paperflow_ingestion import default_registry
+from paperflow_monitor_models import PublicationStatus
 from paperflow_monitor_store import MonitorStore
 from paperflow_settings import ResearchSettings
 from paperflow_telemetry import Telemetry
@@ -163,6 +164,24 @@ class IntegrationMonitor:
                 self._assistant_started_at = time.time()
                 self._curation_requested = False
                 self._next_assistant_at = time.time() + self.settings.assistant.interval_seconds
+
+    def publication_status(self):
+        """Only this coarse reader-facing state crosses the publication boundary."""
+        if not self.settings.monitor.enabled:
+            return PublicationStatus.UNKNOWN
+        health = self.health()
+        if health['scheduler_error'] or health['overdue_runs'] or not health['scheduler_running']:
+            return PublicationStatus.DELAYED
+        if health['curation']['enabled'] and not health['curation']['healthy']:
+            return PublicationStatus.CURATION_DELAYED
+        if not health['healthy'] or health['topics']['error']:
+            return PublicationStatus.DELAYED
+        for channel in self.store.channels():
+            if not channel.paused and (channel.consecutive_failures or
+                    (health['schedule_enabled'] and channel.stale) or
+                    (channel.last_run and channel.last_run.status == 'degraded')):
+                return PublicationStatus.DELAYED
+        return PublicationStatus.CURRENT if health['schedule_enabled'] else PublicationStatus.UNKNOWN
 
     def health(self):
         overdue = [str(run.id) for run in self.store.running()
