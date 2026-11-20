@@ -48,3 +48,16 @@ test('operations surfaces a curation incident and requests a bounded cycle', asy
   await page.getByRole('button',{name:'Request curation cycle'}).click();
   await expect(page.locator('#notice')).toContainText('Curation cycle requested');
 });
+
+test('pipeline shows the affected stage first while retaining successful work',async({page})=>{
+  await page.route('**/api/monitor/curation',route=>route.fulfill({json:{enabled:true,stages:[
+    {stage:'assessment',condition:'overdue',queued:19,running_since:1760000000,attempts_24h:{succeeded:3,failed:2,interrupted:1},
+      last_failure:{error:'CapacityExceededError',at:1760000000},consecutive_failures_24h:2},
+    {stage:'analysis',condition:'completing',queued:2,attempts_24h:{succeeded:12,failed:0,interrupted:0},last_success_at:1760000000}]}}));
+  await page.goto('/sources');
+  const stages=page.getByRole('region',{name:'Curation pipeline'}).getByRole('article');
+  await expect(stages.first()).toContainText('Overdue run');
+  await expect(stages.first()).toContainText('CapacityExceededError');
+  await expect(stages.last()).toContainText('Completing work');
+  await expect(stages.last()).toContainText('12 succeeded');
+});
