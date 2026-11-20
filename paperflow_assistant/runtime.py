@@ -476,10 +476,10 @@ class AssistantWorker:
         from paperflow_story_models import Story, StoryAssessment, StoryFinding
         from paperflow_story_vectors import semantic_candidates
         with self.storage.transaction() as repo:
-            documents = [(story_id, text) for story_id, text in repo.story_documents()
+            documents = [(story_id, text, material_at) for story_id, text, material_at in repo.story_documents()
                          if all(repo.is_public_revision(a.revision_id) for a in repo.story_assessments(story_id=UUID(story_id)))]
         semantic = semantic_candidates(item['title'] + '\n' + context.revision.markdown[:4000],
-            documents, index_path=self.settings.path.with_suffix('.stories.mv2'))
+            documents, index_path=self.settings.path.with_suffix('.stories.mv2'), weeks=self.settings.story_search_weeks)
         with self.storage.transaction() as repo:
             candidates = []
             for candidate in repo.story_candidates(context.revision.id, semantic_ids=semantic):
@@ -689,12 +689,13 @@ class AssistantWorker:
             usage = usage_snapshot(context.usage) if context else {}
             detail = (context.failure if context and context.failure_exception is exc else None) or failure_details(
                 exc, self.settings, context.usage if context else RunUsage())
-            detail['retry_scheduled'] = job['attempts'] < self.settings.max_attempts
-            detail['retry_delay_seconds'] = self.settings.retry_seconds*job['attempts'] if detail['retry_scheduled'] else None
+            budget_attempt = job['attempts'] - job['retry_offset']
+            detail['retry_scheduled'] = budget_attempt < self.settings.max_attempts
+            detail['retry_delay_seconds'] = self.settings.retry_seconds*budget_attempt if detail['retry_scheduled'] else None
             usage['failure'] = detail
             logger.warning(json.dumps({'event': 'curation.attempt.failed', 'run_id': job['id'],
                 'attempt': job['attempts'], 'duration_seconds': time.monotonic()-start,
-                'will_retry': job['attempts'] < self.settings.max_attempts,
+                'will_retry': detail['retry_scheduled'],
                 'retry_delay_seconds': detail['retry_delay_seconds'], 'failure': detail}))
             self.store.fail(job, type(exc).__name__, self.settings, time.monotonic()-start, usage)
             return {'id': job['id'], 'status': 'failed', 'error': type(exc).__name__, 'attempt': job['attempts'], 'failure': detail}
