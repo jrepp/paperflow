@@ -251,9 +251,13 @@ function renderPipeline(curation) {
 }
 
 const operationsPanes = [
-  ['pipeline-health','Pipeline health'], ['curation-overview','Diagnostics'], ['quality','Quality'],
-  ['usage','Usage and spend'], ['monitor-overview','Service health'], ['source-list','Source feeds'],
-  ['recent-runs','Run history']
+  ['pipeline-health','Pipeline health','M3 5h5v5H3z M16 14h5v5h-5z M8 7.5h4v9h4'],
+  ['curation-overview','Diagnostics','M2 12h5l3-8 4 16 3-8h5'],
+  ['quality','Quality','M12 2l8 4v6q0 6-8 10-8-4-8-10V6z M8 12l3 3 5-6'],
+  ['usage','Usage and spend','M3 3v18h18 M7 17v-4 M12 17V9 M17 17V5'],
+  ['monitor-overview','Service health','M3 4h18v6H3z M3 14h18v6H3z M6 7h1 M6 17h1'],
+  ['source-list','Source feeds','M4 4a16 16 0 0116 16 M4 10a10 10 0 0110 10 M5 17a2 2 0 100 4 2 2 0 000-4z'],
+  ['recent-runs','Run history','M3 10a9 9 0 119 11 M3 4v6h6 M12 7v5l4 2']
 ];
 
 function showOperationsPane() {
@@ -270,18 +274,18 @@ function showOperationsPane() {
 window.addEventListener('hashchange',showOperationsPane);
 
 async function sources(generation) {
-  const links = operationsPanes.map(([id,label])=>`<a href="#${id}">${label}</a>`).join('');
+  const links = operationsPanes.map(([id,label,path])=>`<a href="#${id}" title="${label}" aria-label="${label}"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="${path}"/></svg><span>${label}</span></a>`).join('');
   main.innerHTML=`<div class="sources-heading"><h1>Operations</h1>
     <div class="sources-refresh"><button id="refresh-sources">Refresh status</button><span id="sources-updated" class="meta">Checking…</span></div></div>
-    <nav id="operations-nav" aria-label="Operations sections">${links}</nav>
-    <div id="sources-alert" aria-live="polite"></div>
+    <div class="operations-surface"><nav id="operations-nav" aria-label="Operations sections">${links}</nav>
+    <div class="operations-content"><div id="sources-alert" aria-live="polite"></div>
     <section id="pipeline-health" aria-labelledby="pipeline-title"><h2 id="pipeline-title">Curation pipeline</h2><div id="pipeline-stages" class="source-monitor-grid"></div></section>
     <section id="curation-overview" class="panel" aria-label="Research curation"></section>
     <section id="quality" class="panel" aria-label="Quality"></section>
     <section id="usage" class="panel" aria-label="Usage and spend"></section>
     <section id="monitor-overview" aria-label="Service health"></section>
     <section id="source-list" aria-label="Source feeds"><div class="sources-section-heading"><h2>Source feeds</h2><span class="meta">Freshness reflects collection time.</span></div><div id="source-cards" class="source-monitor-grid"></div></section>
-    <section id="recent-runs" aria-label="Run history"><h2>Recent ingestion runs</h2><div id="run-history"></div></section>`;
+    <section id="recent-runs" aria-label="Run history"><h2>Recent ingestion runs</h2><div id="run-history"></div></section></div></div>`;
   showOperationsPane();
   let loading=false,operating=false;
   const sourceName=name=>({'hackernews':'Hacker News','huggingface-papers':'Hugging Face Papers','lemmy-technology':'Lemmy · Technology','tildes-computing':'Tildes · Computing','mbin':'Mbin'}[name] || name);

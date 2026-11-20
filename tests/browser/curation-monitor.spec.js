@@ -81,3 +81,22 @@ test('a bookmarked pane survives reload and Back restores the previous pane',asy
   await expect(page.locator('#source-list')).toBeVisible();
   await expect(page.locator('#recent-runs')).toBeHidden();
 });
+
+for (const width of [390,1280]) {
+  test(`operations rail stays left of the active pane at ${width}px`,async({page})=>{
+    await page.setViewportSize({width,height:844});
+    await page.goto('/sources');
+    const nav=page.getByRole('navigation',{name:'Operations sections'});
+    await expect(nav.locator('a svg')).toHaveCount(7);
+    for (const link of await nav.getByRole('link').all()) {
+      await link.click();
+      await expect(link).toHaveAttribute('aria-current','page');
+      const pane=page.locator('.operations-content > section:visible');
+      await expect(pane).toHaveCount(1);
+      const rail=await nav.boundingBox();
+      const content=await pane.boundingBox();
+      expect(rail.x+rail.width).toBeLessThanOrEqual(content.x);
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    }
+  });
+}
