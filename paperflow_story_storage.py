@@ -77,8 +77,8 @@ class StoryRepositoryMixin:
         return stories, sources, documents, items, identifiers
 
     def story_documents(self):
-        _, _, documents, _, _ = self._story_index()
-        return [(key, '\n'.join(parts)) for key, parts in documents.items()]
+        stories, _, documents, _, _ = self._story_index()
+        return [(key, '\n'.join(parts), stories[key].material_at) for key, parts in documents.items()]
 
     def story_candidates(self, revision_id, limit=5, semantic_ids=()):
         if not 1 <= limit <= 100:

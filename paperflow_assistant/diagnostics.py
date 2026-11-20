@@ -22,7 +22,13 @@ def failure_details(exc, settings, usage, phase='curation'):
     detail = {'error_type': error, 'phase': phase, 'category': 'execution',
               'usage': values, 'budgets': budget_snapshot(settings, phase), 'limit': None,
               'configured_limit': None, 'observed': None, 'measurement': 'unknown'}
-    if error == 'UsageLimitExceeded':
+    if error == 'CapacityExceededError' and type(exc).__module__.startswith('memvid'):
+        detail.update(phase='story_index', category='capacity', limit='index_bytes')
+        match = re.fullmatch(r'MV001: Capacity exceeded\. Current: (\d+) bytes, Limit: (\d+) bytes, Required: (\d+) bytes', str(exc))
+        if match:
+            detail.update(observed=int(match[1]), configured_limit=int(match[2]),
+                          required_bytes=int(match[3]), measurement='reported_bytes')
+    elif error == 'UsageLimitExceeded':
         detail['category'] = 'budget'
         suffix = '. Consider raising the limit, or see the docs on usage limits for budget-aware patterns: https://pydantic.dev/docs/ai/core-concepts/agent/#usage-limits'
         message = str(exc).removesuffix(suffix)

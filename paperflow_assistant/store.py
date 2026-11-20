@@ -52,6 +52,14 @@ class AssistantStore:
                 if sql.strip():
                     conn.execute(sql)
 
+            # Grant a fresh retry budget only to story jobs affected by the old single-file index.
+            # Lifetime attempt numbers remain unique for audit and request metering.
+            if 'retry_offset' not in {row[1] for row in conn.execute("PRAGMA table_info(assistant_jobs)")}:
+                conn.execute("ALTER TABLE assistant_jobs ADD COLUMN retry_offset INTEGER NOT NULL DEFAULT 0")
+                conn.execute("""UPDATE assistant_jobs SET retry_offset=attempts,status='queued',available_at=?
+                    WHERE status IN ('failed','queued') AND error='CapacityExceededError'
+                      AND id IN (SELECT job_id FROM assistant_story_jobs)""", (time.time(),))
+
     def recover(self):
         # The monitor's process lock establishes exclusive ownership before this call.
         with self.connection(True) as conn:
@@ -121,7 +129,7 @@ class AssistantStore:
             used, _, _ = self._token_window(conn, time.time())
             if used >= rolling_token_limit:
                 return None
-            conn.execute("UPDATE assistant_jobs SET status='failed',error='AttemptsExhausted' WHERE status='queued' AND attempts>=?", (max_attempts,))
+            conn.execute("UPDATE assistant_jobs SET status='failed',error='AttemptsExhausted' WHERE status='queued' AND attempts-retry_offset>=?", (max_attempts,))
             priority = {str(rev): rank for rank, rev in enumerate(priority_revisions)}
             conn.create_function('current_assessment', 2, assessment_key, deterministic=True)
             conn.create_function('publication_rank', 1, lambda rev: priority.get(rev, len(priority)))
@@ -236,8 +244,8 @@ class AssistantStore:
     def fail(self, job, error, settings, duration, usage=None):
         with self.connection(True) as conn:
             conn.execute("""UPDATE assistant_jobs SET status=?,error=?,finished_at=?,duration=?,available_at=?,usage=? WHERE id=?""",
-                         ('queued' if job['attempts'] < settings.max_attempts else 'failed',
-                          error, time.time(), duration, time.time()+settings.retry_seconds * job['attempts'], encode(usage or {}), job['id']))
+                         ('queued' if job['attempts'] - job['retry_offset'] < settings.max_attempts else 'failed',
+                          error, time.time(), duration, time.time()+settings.retry_seconds * (job['attempts'] - job['retry_offset']), encode(usage or {}), job['id']))
             conn.execute("UPDATE assistant_attempts SET status='failed',finished_at=?,usage=?,error=? WHERE job_id=? AND status='running'",
                          (time.time(), encode(usage or {}), error, job['id']))
 
@@ -438,7 +446,7 @@ class AssistantStore:
             rows = conn.execute("SELECT job_id,attempt,status,finished_at,error,usage FROM assistant_attempts WHERE finished_at>=? ORDER BY finished_at DESC", (now-86400,)).fetchall()
             last_success = conn.execute("SELECT MAX(finished_at) FROM assistant_attempts WHERE status='succeeded'").fetchone()[0]
             used, missing_usage, expiry = self._token_window(conn, now)
-            next_job = conn.execute("SELECT MIN(available_at) FROM assistant_jobs WHERE status='queued' AND attempts<?", (settings.max_attempts,)).fetchone()[0]
+            next_job = conn.execute("SELECT MIN(available_at) FROM assistant_jobs WHERE status='queued' AND attempts-retry_offset<?", (settings.max_attempts,)).fetchone()[0]
         groups, recent, consecutive = {}, [], 0
         for row in rows:
             if row['status'] != 'failed':
