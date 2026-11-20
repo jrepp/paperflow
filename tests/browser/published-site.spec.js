@@ -205,3 +205,29 @@ test('curated item sends its exact run version and uncurated cards have no vote 
     await expect(page.locator('article[id^="item-"]').first().locator(':scope > .rating-receipt')).toHaveText('Feedback saved: Needs work.');
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
+
+test('the static channel selection survives reload and browser history', async ({page}, testInfo)=>{
+  const directory=testInfo.outputPath('channel-feed');
+  execFileSync('uv',['run','--locked','--group','dev','--extra','test','python','-c',
+    "import runpy,sys; from pathlib import Path; runpy.run_path('tests/test_publish_site.py')['test_site_renders_channels_with_decay_and_manifest'](Path(sys.argv[1]))",directory]);
+  await page.goto(pathToFileURL(`${directory}/site/index.html`).href);
+  const selector=page.getByLabel('Topic or source');
+  const rows=page.locator('.feed-row:visible');
+  await expect(rows).toHaveCount(3);
+  const kind=page.getByLabel('Type',{exact:true});
+  await kind.selectOption('paper');
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toContainText('Fresh paper');
+  await selector.selectOption('channel:hackernews');
+  await expect(rows).toHaveCount(0);
+  await kind.selectOption('');
+  await selector.selectOption('channel:huggingface-papers');
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toContainText('Fresh paper');
+  await page.reload();
+  await expect(selector).toHaveValue('channel:huggingface-papers');
+  await selector.selectOption('channel:hackernews');
+  await expect(rows).toHaveCount(2);
+  await page.goBack();
+  await expect(rows).toHaveCount(1);
+});

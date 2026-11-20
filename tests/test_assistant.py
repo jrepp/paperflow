@@ -577,3 +577,63 @@ def test_stage_health_prioritizes_overdue_and_keeps_success_evidence(tmp_path):
     assert stages[1]['attempts_24h']['succeeded'] == stages[1]['queued'] == 1
     assert stages[1]['oldest_queued_at'] == now-1800
     assert store.pipeline_stages('active',overdue=False,budget_blocked=True,now=now)[1]['condition'] == 'budget_blocked'
+
+
+@pytest.mark.parametrize('kind', ['article', 'discussion'])
+def test_long_article_excerpts_are_metered_exact_and_bounded(tmp_path, kind):
+    from pydantic_ai.messages import ModelResponse, ToolCallPart, UserPromptPart
+    from pydantic_ai.models.function import FunctionModel
+    from paperflow_assistant.evidence import source_ranges
+    from paperflow_assistant.runtime import revision_passage
+
+    settings, storage, item, revision, output = fixture(tmp_path)
+    settings.assistant.evaluation_sample_rate = 0
+    worker = AssistantWorker(settings)
+    worker.initialize()
+    text = revision.markdown + '\n' + 'Long article evidence. ' * 5000
+    rev = CurationService(storage).add(ContentRevision.from_markdown(item_id=item.id, markdown=text))
+    output['evidence_basis'] = rev.evidence_basis
+    output['findings'][0]['citations'][0]['revision_id'] = str(rev.id)
+    ctx = Context({'id':'abcabcab','attempts':1}, rev,storage,worker.store,settings.assistant,None,RunUsage())
+    def choose(messages, info):
+        prompt = next(json.loads(p.content) for m in messages for p in m.parts if isinstance(p, UserPromptPart))
+        ids = list(prompt['previews'])
+        assert len(ids) <= 24
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name,{'blocks':[ids[-1]]})])
+    def reason(messages, info):
+        prompt = next(json.loads(p.content) for m in messages for p in m.parts if isinstance(p, UserPromptPart))
+        assert prompt['source_text'] == text[:2000]
+        passage, = prompt['selected_source_passages']
+        assert passage['text'] == text[passage['start']:passage['end']]
+        assert 'text' not in revision_passage(ctx,rev,2000,2000)
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name,output)])
+    article = {**item.model_dump(mode='json'),'kind':kind}
+    result = asyncio.run(run_agent(ctx,article,FunctionModel(reason),FunctionModel(choose)))
+    assert result[3]['article_excerpt']['method'] == 'decision_excerpt'
+    assert result[3]['article_excerpt']['supplied_characters'] <= 8000
+    assert 'article_excerpt' in [r['role'] for r in worker.store.request_metrics('abcabcab',1)]
+    def offline(*args):
+        raise RuntimeError('unavailable')
+    ranges, method = asyncio.run(source_ranges(ctx,article,FunctionModel(offline)))
+    assert method == 'fallback_excerpt' and sum(b-a for a,b in ranges) <= 8000
+    ranges, method = asyncio.run(source_ranges(ctx,item.model_dump(mode='json'),FunctionModel(offline)))
+    assert ranges == [(0,len(text))] and method == 'source_window'
+
+
+def test_article_excerpt_schema_is_supported_by_decision_provider(tmp_path, monkeypatch):
+    from pydantic_ai.models.typesafe import TypeSafeModel
+    from pydantic_ai.providers.typesafe import TypeSafeProvider
+    from paperflow_assistant.evidence import source_ranges
+    settings, storage, item, rev, _ = fixture(tmp_path)
+    worker = AssistantWorker(settings)
+    worker.initialize()
+    ctx = Context({'id':'schema','attempts':1}, rev.model_copy(update={'markdown':'source '*5000}),
+                  storage,worker.store,settings.assistant,None,RunUsage())
+    model = TypeSafeModel('jev-1.14.0',provider=TypeSafeProvider(api_key='test-key'))
+    called = []
+    async def offline(*args, **kwargs):
+        called.append(True)
+        raise RuntimeError('transport offline')
+    monkeypatch.setattr(model.client,'system_one',offline)
+    _, method = asyncio.run(source_ranges(ctx,{'title':item.title,'kind':'article'},model))
+    assert called and method == 'fallback_excerpt'

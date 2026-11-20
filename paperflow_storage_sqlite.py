@@ -198,6 +198,17 @@ class SQLiteResearchRepository(StoryRepositoryMixin):
                 first_seen_at=first,title=observation.entry.title,excerpt=observation.entry.excerpt[:2000],channel=observation.channel))
         return results
 
+    def published_topic_members(self, start, end):
+        if not self._conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='editorial_topics'").fetchone():
+            return []
+        rows = self._conn.execute("""SELECT t.id,json_extract(t.payload,'$.title'),m.item_id
+            FROM editorial_topics t JOIN editorial_topic_members m ON m.topic_id=t.id
+            AND m.run_id=json_extract(t.payload,'$.current_run_id')
+            WHERE json_extract(t.payload,'$.editorial_status')='published'
+            AND julianday(m.first_seen_at)>=julianday(?) AND julianday(m.first_seen_at)<julianday(?)
+            ORDER BY json_extract(t.payload,'$.title'),t.id""", (start.isoformat(),end.isoformat()))
+        return [tuple(row) for row in rows]
+
     def topics(self):
         from paperflow_topic_models import Topic
         return [Topic.model_validate_json(r[0]) for r in self._conn.execute('SELECT payload FROM editorial_topics ORDER BY topic_key')]

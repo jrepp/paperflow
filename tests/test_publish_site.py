@@ -47,7 +47,8 @@ def test_site_renders_channels_with_decay_and_manifest(tmp_path: Path) -> None:
         _batch("hackernews", "https://news.ycombinator.com/rss", [
             ("Fresh news item", fresh), ("Older news item", older), ("Stale news item", stale),
         ]),
-        _batch("huggingface-papers", "https://huggingface.co/papers", [("Fresh paper", older)]),
+        _batch("huggingface-papers", "https://huggingface.co/papers", [("Fresh paper", older)]).model_copy(
+            update={"config": ChannelConfig(url="https://huggingface.co/papers", kind="paper")}),
     ])
     out = tmp_path / "site"
 

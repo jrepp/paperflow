@@ -9,25 +9,30 @@ test('curation monitor distinguishes volume from sampled estimated quality', asy
       input_tokens:12000,output_tokens:3000,priced_requests:15,unpriced_requests:1,pending_requests:0,by_role_and_model:{}},
     quality:{sample_evaluated:3,sample_selected:4,evaluation_errors:1,
       groups:{'evidence-v1:judge':{n:3,passed:2,pass_rate:2/3,pass_rate_interval_95:[0.21,0.94]}}}}}));
-  await page.goto('/sources');
+  await page.goto('/sources#curation-overview');
   const panel=page.getByRole('region',{name:'Research curation'});
   await expect(panel).toContainText('12 / 18');
-  await expect(panel).toContainText('3 evaluated / 4 selected');
-  await expect(panel).toContainText('Evaluation errors: 1');
-  await expect(panel).toContainText('Human-calibrated accuracy is unknown');
-  await expect(panel).toContainText('provenance, not factual correctness');
-  await expect(panel).toContainText('$0.123456');
-  await expect(panel).toContainText('12000 / 3000');
-  await expect(panel).toContainText('Unknown usage is not free');
   await expect(panel).toContainText('130525 / 120000');
   await expect(panel).toContainText('Rolling 24-hour tokens: 18000 / 100000');
   await expect(panel).toContainText('retry_backoff');
+  await page.getByRole('link',{name:'Quality',exact:true}).click();
+  const quality=page.getByRole('region',{name:'Quality',exact:true});
+  await expect(quality).toContainText('3 evaluated / 4 selected');
+  await expect(quality).toContainText('Evaluation errors: 1');
+  await expect(quality).toContainText('Human-calibrated accuracy is unknown');
+  await expect(quality).toContainText('provenance, not factual correctness');
+  await page.getByRole('link',{name:'Usage and spend',exact:true}).click();
+  const spend=page.getByRole('region',{name:'Usage and spend'});
+  await expect(spend).toContainText('$0.123456');
+  await expect(spend).toContainText('12000 / 3000');
+  await expect(spend).toContainText('Unknown usage is not free');
+
 });
 
 test('curation monitor does not report perfect quality for an empty sample', async({page})=>{
   await page.route('**/api/monitor/curation', route=>route.fulfill({json:{enabled:true,counts:{},quality:{groups:{}}}}));
-  await page.goto('/sources');
-  await expect(page.getByRole('region',{name:'Research curation'})).toContainText('Quality estimate unavailable');
+  await page.goto('/sources#quality');
+  await expect(page.getByRole('region',{name:'Quality'})).toContainText('Quality estimate unavailable');
 });
 
 test('operations surfaces a curation incident and requests a bounded cycle', async({page})=>{
@@ -45,6 +50,7 @@ test('operations surfaces a curation incident and requests a bounded cycle', asy
   await expect(page.locator('#monitor-overview')).toContainText('Curation needs attention');
   await expect(page.locator('#monitor-overview')).toContainText('Curation delayed');
   await expect(page.locator('#sources-alert')).toContainText('CapacityExceededError');
+  await page.getByRole('link',{name:'Diagnostics',exact:true}).click();
   await page.getByRole('button',{name:'Request curation cycle'}).click();
   await expect(page.locator('#notice')).toContainText('Curation cycle requested');
 });
@@ -60,4 +66,18 @@ test('pipeline shows the affected stage first while retaining successful work',a
   await expect(stages.first()).toContainText('CapacityExceededError');
   await expect(stages.last()).toContainText('Completing work');
   await expect(stages.last()).toContainText('12 succeeded');
+});
+
+test('a bookmarked pane survives reload and Back restores the previous pane',async({page})=>{
+  await page.goto('/sources#source-list');
+  const nav=page.getByRole('navigation',{name:'Operations sections'});
+  await expect(nav.getByRole('link',{name:'Source feeds'})).toHaveAttribute('aria-current','page');
+  await nav.getByRole('link',{name:'Run history'}).click();
+  await expect(page.getByRole('heading',{name:'Recent ingestion runs'})).toBeVisible();
+  await expect(page.locator('#source-list')).toBeHidden();
+  await page.reload();
+  await expect(page.locator('#recent-runs')).toBeVisible();
+  await page.goBack();
+  await expect(page.locator('#source-list')).toBeVisible();
+  await expect(page.locator('#recent-runs')).toBeHidden();
 });

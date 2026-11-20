@@ -250,8 +250,39 @@ function renderPipeline(curation) {
   }).join('');
 }
 
+const operationsPanes = [
+  ['pipeline-health','Pipeline health'], ['curation-overview','Diagnostics'], ['quality','Quality'],
+  ['usage','Usage and spend'], ['monitor-overview','Service health'], ['source-list','Source feeds'],
+  ['recent-runs','Run history']
+];
+
+function showOperationsPane() {
+  const nav = document.getElementById('operations-nav');
+  if (!nav) return;
+  const selected = operationsPanes.find(([id]) => '#' + id === location.hash)?.[0] || 'pipeline-health';
+  for (const link of nav.querySelectorAll('a')) {
+    const current = link.hash === '#' + selected;
+    document.getElementById(link.hash.slice(1)).hidden = !current;
+    if (current) link.setAttribute('aria-current','page');
+    else link.removeAttribute('aria-current');
+  }
+}
+window.addEventListener('hashchange',showOperationsPane);
+
 async function sources(generation) {
-  main.innerHTML=`<div class="sources-heading"><div><h1>Operations</h1><nav aria-label="Operations sections"><a href="#pipeline-health">Pipeline health</a> · <a href="#curation-overview">Diagnostics</a> · <a href="#monitor-overview">Service health</a> · <a href="#source-list">Source feeds</a> · <a href="#recent-runs">Run history</a></nav></div><div class="sources-refresh"><button id="refresh-sources">Refresh status</button><span id="sources-updated" class="meta">Checking…</span></div></div><div id="sources-alert" aria-live="polite"></div><section id="pipeline-health" aria-labelledby="pipeline-title"><h2 id="pipeline-title">Curation pipeline</h2><div id="pipeline-stages" class="source-monitor-grid"></div></section><section id="monitor-overview" aria-label="Service health"></section><section id="curation-overview" class="panel" aria-label="Research curation"></section><div class="sources-section-heading"><h2>Source feeds</h2><span class="meta">Freshness reflects collection, not publication date.</span></div><div id="source-list" class="source-monitor-grid"></div><details id="recent-runs" class="run-history"><summary>Recent ingestion runs</summary><div id="run-history"></div></details>`;
+  const links = operationsPanes.map(([id,label])=>`<a href="#${id}">${label}</a>`).join('');
+  main.innerHTML=`<div class="sources-heading"><h1>Operations</h1>
+    <div class="sources-refresh"><button id="refresh-sources">Refresh status</button><span id="sources-updated" class="meta">Checking…</span></div></div>
+    <nav id="operations-nav" aria-label="Operations sections">${links}</nav>
+    <div id="sources-alert" aria-live="polite"></div>
+    <section id="pipeline-health" aria-labelledby="pipeline-title"><h2 id="pipeline-title">Curation pipeline</h2><div id="pipeline-stages" class="source-monitor-grid"></div></section>
+    <section id="curation-overview" class="panel" aria-label="Research curation"></section>
+    <section id="quality" class="panel" aria-label="Quality"></section>
+    <section id="usage" class="panel" aria-label="Usage and spend"></section>
+    <section id="monitor-overview" aria-label="Service health"></section>
+    <section id="source-list" aria-label="Source feeds"><div class="sources-section-heading"><h2>Source feeds</h2><span class="meta">Freshness reflects collection time.</span></div><div id="source-cards" class="source-monitor-grid"></div></section>
+    <section id="recent-runs" aria-label="Run history"><h2>Recent ingestion runs</h2><div id="run-history"></div></section>`;
+  showOperationsPane();
   let loading=false,operating=false;
   const sourceName=name=>({'hackernews':'Hacker News','huggingface-papers':'Hugging Face Papers','lemmy-technology':'Lemmy · Technology','tildes-computing':'Tildes · Computing','mbin':'Mbin'}[name] || name);
   const stamp=value=>value?new Date(value).toLocaleString(): 'Not yet';
@@ -276,15 +307,20 @@ async function sources(generation) {
       const editionStatus={current:'Updates current',updates_delayed:'Updates delayed',curation_delayed:'Curation delayed',unknown:'Status unavailable'}[publication?.service_status];
       const focused=document.activeElement.id;
       const curator=document.querySelector('#curation-overview');
-      if(!curation){curator.innerHTML='<h2>Research curation</h2><p>Status unavailable.</p>';}
-      else if(!curation.enabled){curator.innerHTML='<h2>Research curation</h2><p>Model curation is disabled.</p>';}
+      const qualityPanel=document.querySelector('#quality'), usagePanel=document.querySelector('#usage');
+      const unavailable=curation && !curation.enabled?'Curation is disabled.':'Measurements unavailable.';
+      qualityPanel.innerHTML=`<h2>Quality</h2><p>${unavailable}</p>`;
+      usagePanel.innerHTML=`<h2>Usage and spend</h2><p>${unavailable}</p>`;
+      if(!curation){curator.innerHTML='<h2>Curation diagnostics</h2><p>Status unavailable.</p>';}
+      else if(!curation.enabled){curator.innerHTML='<h2>Curation diagnostics</h2><p>Model curation is disabled.</p>';}
       else{
         const counts=curation.counts||{},quality=curation.quality||{};
         const groups=Object.entries(quality.groups||{}).map(([name,g])=>{
           const bounds=g.pass_rate_interval_95;
           return `<li>${esc(name)}: ${g.passed} / ${g.n} passed (${Math.round(g.pass_rate*100)}%). Estimated interval: ${Math.round(bounds[0]*100)}–${Math.round(bounds[1]*100)}%.</li>`;
         }).join('');
-        curator.innerHTML=`<h2>Research curation</h2><dl class="monitor-metrics"><div><dt>Completed / eligible</dt><dd>${counts.succeeded||0} / ${curation.eligible_jobs||0}</dd></div><div><dt>Queued / running</dt><dd>${counts.queued||0} / ${counts.running||0}</dd></div><div><dt>Failed / retries</dt><dd>${counts.failed||0} / ${curation.retries||0}</dd></div><div><dt>Open follow-ups</dt><dd>${curation.active_memory?.follow_up||0}</dd></div></dl><p>Counts refer to source revisions and harness configurations.</p><p>${curation.valid_quote_citations||0} exact citation matches. Matches establish provenance, not factual correctness.</p><p>Quality sample: ${quality.sample_evaluated||0} evaluated / ${quality.sample_selected||0} selected. Evaluation errors: ${quality.evaluation_errors||0}.</p>${groups?`<ul>${groups}</ul>`:'<p>Quality estimate unavailable: no completed evaluations.</p>'}<p class="muted">Model-estimated quality. Human-calibrated accuracy is unknown.</p>`;
+        curator.innerHTML=`<h2>Curation diagnostics</h2><dl class="monitor-metrics"><div><dt>Completed / eligible</dt><dd>${counts.succeeded||0} / ${curation.eligible_jobs||0}</dd></div><div><dt>Queued / running</dt><dd>${counts.queued||0} / ${counts.running||0}</dd></div><div><dt>Failed / retries</dt><dd>${counts.failed||0} / ${curation.retries||0}</dd></div><div><dt>Open follow-ups</dt><dd>${curation.active_memory?.follow_up||0}</dd></div></dl><p>Counts refer to source revisions and harness configurations.</p>`;
+        qualityPanel.innerHTML=`<h2>Quality</h2><p>${curation.valid_quote_citations||0} exact citation matches. Matches establish provenance, not factual correctness.</p><p>Quality sample: ${quality.sample_evaluated||0} evaluated / ${quality.sample_selected||0} selected. Evaluation errors: ${quality.evaluation_errors||0}.</p>${groups?`<ul>${groups}</ul>`:'<p>Quality estimate unavailable: no completed evaluations.</p>'}<p class="muted">Model-estimated quality. Human-calibrated accuracy is unknown.</p>`;
         const assessments=curation.story_assessments?.counts||{};
         const heading=curator.querySelector('h2');
         heading.insertAdjacentHTML('afterend', `<p>Story assessments · ${esc(assessments.queued??'—')} queued · ${esc(assessments.failed??'—')} failed</p><button id="request-curation">Request curation cycle</button>`);
@@ -309,7 +345,7 @@ async function sources(generation) {
         if(spend){
           const money=value=>value==null?'Unknown':`$${Number(value).toFixed(6)}`;
           const groups=Object.entries(spend.by_role_and_model||{}).map(([name,g])=>`<tr><th scope="row">${esc(name)}</th><td>${g.requests}</td><td>${g.input_tokens}</td><td>${g.output_tokens}</td><td>${g.cache_read_tokens}</td><td>${money(g.estimated_usd)}</td></tr>`).join('');
-          curator.insertAdjacentHTML('beforeend',`<h3>Usage and spend · last ${spend.window_days} days</h3><dl class="monitor-metrics"><div><dt>Estimated spend</dt><dd>${money(spend.estimated_usd)}</dd></div><div><dt>Per completed analysis</dt><dd>${money(spend.estimated_usd_per_completed_job)}</dd></div><div><dt>Input / output tokens</dt><dd>${spend.input_tokens} / ${spend.output_tokens}</dd></div><div><dt>Retry spend</dt><dd>${money(spend.retry_estimated_usd)}</dd></div></dl><p>${spend.priced_requests} priced requests. ${spend.unpriced_requests} requests have unknown cost, including ${spend.pending_requests} pending.</p><p>Current schedule: ${curation.schedule?.items_per_cycle||1} item(s) per cycle, every ${curation.schedule?.interval_seconds||60} seconds. Rolling token limit: ${curation.schedule?.rolling_token_limit??"unknown"}.</p><details><summary>Usage by model role</summary><div class="overflow-x-auto"><table><thead><tr><th>Role and model</th><th>Requests</th><th>Input</th><th>Output</th><th>Cached input</th><th>Estimated USD</th></tr></thead><tbody>${groups}</tbody></table></div></details><p class="muted">Token-price estimates, not billed spend. Unknown usage is not free. Prices and request timing affect the estimate.</p>`);
+          usagePanel.innerHTML=`<h2>Usage and spend · last ${spend.window_days} days</h2><dl class="monitor-metrics"><div><dt>Estimated spend</dt><dd>${money(spend.estimated_usd)}</dd></div><div><dt>Per completed analysis</dt><dd>${money(spend.estimated_usd_per_completed_job)}</dd></div><div><dt>Input / output tokens</dt><dd>${spend.input_tokens} / ${spend.output_tokens}</dd></div><div><dt>Retry spend</dt><dd>${money(spend.retry_estimated_usd)}</dd></div></dl><p>${spend.priced_requests} priced requests. ${spend.unpriced_requests} requests have unknown cost, including ${spend.pending_requests} pending.</p><p>Current schedule: ${curation.schedule?.items_per_cycle||1} item(s) per cycle, every ${curation.schedule?.interval_seconds||60} seconds. Rolling token limit: ${curation.schedule?.rolling_token_limit??"unknown"}.</p><details><summary>Usage by model role</summary><div class="overflow-x-auto"><table><thead><tr><th>Role and model</th><th>Requests</th><th>Input</th><th>Output</th><th>Cached input</th><th>Estimated USD</th></tr></thead><tbody>${groups}</tbody></table></div></details><p class="muted">Token-price estimates, not billed spend. Unknown usage is not free. Prices and request timing affect the estimate.</p>`;
         }
       }
       const curationIssue=health?.curation?.enabled && (health.curation.degraded || health.curation.overdue || health.curation.healthy===false);
@@ -322,11 +358,11 @@ async function sources(generation) {
         !health&&'Monitor health unavailable',observedResult.status==='rejected'&&'Library counts unavailable'].filter(Boolean);
       document.querySelector('#sources-alert').innerHTML=errors.length?`<p class="monitor-callout">${errors.map(esc).join(' · ')}</p>`:'';
       document.querySelector('#monitor-overview').dataset.health=health?.enabled===false?'disabled':health?.healthy&&!curationIssue&&!publicationFailed?'healthy':'attention';
-      document.querySelector('#monitor-overview').innerHTML=`<div class="monitor-mode"><span class="health-dot" aria-hidden="true"></span><strong>${mode}</strong><span class="meta">${health?.enabled===false?'Local library available':health?.healthy?'Worker available':'See diagnostics below'}</span></div><dl class="monitor-metrics"><div><dt>Source feeds</dt><dd>${new Set([...observed.map(c=>c.channel),...channels.map(c=>c.name)]).size}</dd></div><div><dt>Running / queued</dt><dd>${running}</dd></div><div><dt>Need attention</dt><dd>${attention}</dd></div><div><dt>Paused</dt><dd>${paused}</dd></div></dl><div class="monitor-footnotes"><span>Latest static build: ${publicationLabel}${publication?.built_at?' · '+esc(stamp(publication.built_at)):''}${editionStatus?' · '+editionStatus:''}</span><span>Running revision: <code>${esc(version?.commit?.slice(0,12)||'unavailable')}</code></span><span>Topic curator: ${health?.topics?.running?'running':health?.topics?.error?'needs attention':health?.topics?.enabled===false?'disabled':health?.enabled===false?'not running':health?.schedule_enabled===false?'on request':'scheduled'}</span><span>Telemetry: ${health?.telemetry?.otlp_configured?'OTLP configured · delivery not verified':'export not configured or unavailable'}</span></div>`;
+      document.querySelector('#monitor-overview').innerHTML=`<h2>Service health</h2><div class="monitor-mode"><span class="health-dot" aria-hidden="true"></span><strong>${mode}</strong><span class="meta">${health?.enabled===false?'Local library available':health?.healthy?'Worker available':'See diagnostics below'}</span></div><dl class="monitor-metrics"><div><dt>Source feeds</dt><dd>${new Set([...observed.map(c=>c.channel),...channels.map(c=>c.name)]).size}</dd></div><div><dt>Running / queued</dt><dd>${running}</dd></div><div><dt>Need attention</dt><dd>${attention}</dd></div><div><dt>Paused</dt><dd>${paused}</dd></div></dl><div class="monitor-footnotes"><span>Latest static build: ${publicationLabel}${publication?.built_at?' · '+esc(stamp(publication.built_at)):''}${editionStatus?' · '+editionStatus:''}</span><span>Running revision: <code>${esc(version?.commit?.slice(0,12)||'unavailable')}</code></span><span>Topic curator: ${health?.topics?.running?'running':health?.topics?.error?'needs attention':health?.topics?.enabled===false?'disabled':health?.enabled===false?'not running':health?.schedule_enabled===false?'on request':'scheduled'}</span><span>Telemetry: ${health?.telemetry?.otlp_configured?'OTLP configured · delivery not verified':'export not configured or unavailable'}</span></div>`;
       const open=new Set([...document.querySelectorAll('#source-list details[open]')].map(e=>e.id));
       const names=[...new Set([...channels.map(c=>c.name),...observed.map(c=>c.channel)])];
       names.sort((a,b)=>{const rank=n=>({Failed:0,Warnings:1,Running:2,Queued:2,Stale:3,'Not run yet':4,Fresh:5,Paused:6,'Stored only':7}[statusOf(channels.find(c=>c.name===n))]);return rank(a)-rank(b)||a.localeCompare(b);});
-      const list=document.querySelector('#source-list');list.innerHTML='';
+      const list=document.querySelector('#source-cards');list.innerHTML='';
       for(const name of names){
         const c=channels.find(c=>c.name===name),stats=observed.find(c=>c.channel===name),state=statusOf(c),run=c?.last_run;
         const card=document.createElement('article');card.className='source-monitor-card';card.dataset.status=state.toLowerCase().replaceAll(' ','-');

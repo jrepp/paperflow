@@ -63,14 +63,14 @@ def build_site(config_path: str, out_dir: str | Path, *, window_hours: int = DEF
     return build_site_from_storage(SQLiteResearchStorage(settings.storage), out_dir,
                                    window_hours=window_hours, per_channel_limit=per_channel_limit, now=now,
                                    workspace_url=settings.publishing.workspace_url,
-                                   assistant_store=_assistant_store(settings.assistant), releases_dir=settings.publishing.releases_dir)
+                                   topic_settings=settings.topics, assistant_store=_assistant_store(settings.assistant), releases_dir=settings.publishing.releases_dir)
 
 
 def build_site_from_storage(storage: SQLiteResearchStorage, out_dir: str | Path, *,
                             window_hours: int = DEFAULT_WINDOW_HOURS,
                             per_channel_limit: int = DEFAULT_PER_CHANNEL_LIMIT,
                             now: datetime | None = None, workspace_url: str | None = None,
-                            assistant_store=None, releases_dir: Path | None = None,
+                            assistant_store=None, releases_dir: Path | None = None, topic_settings=None,
                             publication_status: PublicationStatus = PublicationStatus.UNKNOWN) -> dict:
     """Render the published bundle from an existing research storage."""
     workspace_url = PublishingSettings(workspace_url=workspace_url).workspace_url
@@ -85,6 +85,22 @@ def build_site_from_storage(storage: SQLiteResearchStorage, out_dir: str | Path,
         sections = publication_sections(repo, now=now, window_hours=window_hours,
                                         per_channel_limit=per_channel_limit)
         selected_ids = {item.id for section in sections for _, item in section["items"]}
+        from paperflow_topic_models import TopicSettings
+        topic_settings = topic_settings or TopicSettings()
+        public_ids = {str(item_id) for item_id in selected_ids}
+        topics_by_item = {}
+        topic_titles = {}
+        if topic_settings.enabled:
+            start = now - timedelta(hours=topic_settings.window_hours)
+            for topic_id, title, item_id in repo.published_topic_members(start, now):
+                if item_id in public_ids:
+                    topic_titles[topic_id] = title
+                    topics_by_item.setdefault(item_id, []).append(topic_id)
+        filters_by_item = {}
+        for section in sections:
+            for _, item in section["items"]:
+                filters_by_item.setdefault(item.id, []).append(
+                    [section["name"], item.kind, topics_by_item.get(str(item.id), [])])
         story_items = set()
         if hasattr(repo, "story_schema_available") and repo.story_schema_available():
             stories = _story_projection(repo, selected_ids)
@@ -133,7 +149,8 @@ def build_site_from_storage(storage: SQLiteResearchStorage, out_dir: str | Path,
     }
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "index.html").write_text(_render(sections, manifest, workspace_url=workspace_url, cards=cards, stories=stories), encoding="utf-8")
+    (out / "index.html").write_text(_render(sections, manifest, workspace_url=workspace_url, cards=cards, stories=stories,
+                                         filters_by_item=filters_by_item, topic_titles=topic_titles), encoding="utf-8")
     (out / "build.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return manifest
 
@@ -295,11 +312,11 @@ def _card_actions(kind=None, record_id=None, version=None):
     return ''.join(parts)
 
 
-def _story_row(row, now, anchors):
+def _story_row(row, now, anchors, filters):
     story = row["story"]
     esc = html.escape
     summary = next((line.strip() for line in story.account.splitlines() if line.strip() and not line.lstrip().startswith('#')), '')
-    parts = [f'<li class="feed-row"><article id="story-{story.id}" tabindex="-1">',
+    parts = [f'<li class="feed-row"><article id="story-{story.id}" data-feed-filters="{html.escape(json.dumps(filters), quote=True)}" tabindex="-1">',
              '<h2><a href="#story-account-' + str(story.id) + '">' + esc(story.title) + '</a></h2>',
              '<div class="meta item-meta">Updated ' + esc(_age_text(story.material_at, now)) + '</div>',
              '<p>' + esc(summary) + '</p>',
@@ -525,7 +542,7 @@ def _host(url: str | None) -> str:
     return rest.split("/", 1)[0]
 
 
-def _item_li(pair: tuple[datetime, object], now: datetime, cards: dict, suffix: str = "") -> str:
+def _item_li(pair: tuple[datetime, object], now: datetime, cards: dict, suffix: str, filters) -> str:
     when, item = pair
     url = html.escape(str(item.canonical_url or ""))
     host = html.escape(_host(str(item.canonical_url or "")))
@@ -533,14 +550,16 @@ def _item_li(pair: tuple[datetime, object], now: datetime, cards: dict, suffix: 
     age = html.escape(_age_text(when, now))
     ref = f'<a href="{url}">{title}</a>' if url else title
     meta = f"{host} · {age}" if host else age
-    return f'<li class="feed-row"><article id="item-{item.id}{suffix}" tabindex="-1"><h2>{ref}</h2><div class="meta item-meta">{meta}</div>{_card(item, cards.get(item.id, {}))}<p class="rating-receipt" hidden></p></article></li>'
+    return f'<li class="feed-row"><article id="item-{item.id}{suffix}" data-feed-filters="{html.escape(json.dumps(filters), quote=True)}" tabindex="-1"><h2>{ref}</h2><div class="meta item-meta">{meta}</div>{_card(item, cards.get(item.id, {}))}<p class="rating-receipt" hidden></p></article></li>'
 
 
-def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None = None, cards: dict | None = None, stories: list[dict] | None = None) -> str:
+def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None = None, cards: dict | None = None, stories: list[dict] | None = None,
+            filters_by_item: dict, topic_titles: dict) -> str:
     now = datetime.fromtimestamp(manifest["epoch"], tz=timezone.utc)
     cards = cards or {}
     esc = html.escape
-    latest = _balanced(sections)
+    latest = _balanced([{**section, "items": [(when,item,section["name"]) for when,item in section["items"]]}
+                        for section in sections])
     stories = stories or []
     # Embed the same packaged stylesheet as the interactive reader so published
     # bundles work offline and never depend on a live application's asset route.
@@ -582,12 +601,29 @@ def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None =
     ]
     if latest or stories:
         anchors = {pair[1].id for pair in latest}
-        rows = [(row["story"].material_at, _story_row(row, now, anchors)) for row in stories]
+        source_options = ''.join(f'<option value="channel:{esc(c["name"], quote=True)}">{esc(c["name"])}</option>'
+                                 for c in manifest["channels"])
+        topic_options = ''.join(f'<option value="topic:{esc(key, quote=True)}">{esc(title)}</option>'
+                               for key,title in topic_titles.items())
+        topic_group = f'<optgroup label="Topics">{topic_options}</optgroup>' if topic_options else ''
+        kinds = {kind for entries in filters_by_item.values() for _,kind,_ in entries}
+        labels = {'paper':'Papers','article':'Articles','discussion':'Discussions','note':'Notes','manuscript':'Manuscripts'}
+        kind_options = ''.join(f'<option value="{esc(kind)}">{esc(labels.get(kind, kind))}</option>' for kind in sorted(kinds))
+        parts.append('<div id="published-filters" class="feed-toolbar" hidden><div><label for="published-channel">Topic or source</label> '
+                     '<select id="published-channel"><option value="">All channels</option>' + topic_group +
+                     f'<optgroup label="Source feeds">{source_options}</optgroup></select></div>'
+                     f'<div><label for="published-kind">Type</label> <select id="published-kind"><option value="">All types</option>{kind_options}</select></div>'
+                     '<span id="filtered-count" role="status"></span></div>')
+        rows = []
+        for row in stories:
+            filters = [entry for src in row["sources"] for entry in filters_by_item.get(src["item"].id, [])]
+            rows.append((row["story"].material_at, _story_row(row, now, anchors, filters)))
         seen = set()
-        for pair in latest:
-            item_id = pair[1].id
+        for when, item, channel in latest:
+            item_id = item.id
             suffix = f"-{len(rows)}" if item_id in seen else ""
-            rows.append((pair[0], _item_li(pair, now, cards, suffix)))
+            filters = [entry for entry in filters_by_item[item_id] if entry[0] == channel]
+            rows.append((when, _item_li((when,item), now, cards, suffix, filters)))
             seen.add(item_id)
         if stories:
             rows.sort(key=lambda row: row[0], reverse=True)
@@ -595,7 +631,7 @@ def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None =
     else:
         parts.append("<p>No recent items yet.</p>")
     parts.extend(_story_document(row) for row in stories)
-    documents = {item.id: item for _, item in latest}
+    documents = {item.id: item for _, item, _ in latest}
     parts.extend(_document(item, cards.get(item.id, {})) for item in documents.values())
     parts.append("</main>")
     workspace_link = f' · <a href="{esc(workspace_url, quote=True)}">Open workspace</a>' if workspace_url else ""

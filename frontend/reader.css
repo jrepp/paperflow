@@ -289,3 +289,13 @@ button,.control,nav a,.brand { max-width:100%; overflow-wrap:anywhere; white-spa
   .published-page .feed-row { padding-block:1.2rem 1rem; }
   .published-page main { padding-block:1.5rem; }
 }
+
+.published-page .feed-row[hidden], #published-filters[hidden] { display:none; }
+#published-filters { margin-block:1rem; }
+#published-filters > div { display:grid; gap:.2rem; max-width:100%; }
+#published-filters select { max-width:100%; }
+#operations-nav { display:flex; flex-wrap:wrap; gap:.35rem; border-bottom:1px solid var(--line); margin-block:.5rem 1.2rem; padding-bottom:.65rem; }
+#operations-nav a { padding:.4rem .65rem; color:var(--ink); text-decoration:none; border:1px solid transparent; border-radius:.25rem; }
+#operations-nav a[aria-current="page"] { background:var(--tint); color:var(--accent); border-color:var(--line); font-weight:650; }
+#operations-nav a:hover { text-decoration:underline; }
+#operations-nav ~ section[hidden] { display:none; }
