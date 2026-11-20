@@ -1,5 +1,11 @@
 /* Published cards work as native disclosures; feedback adds an optional network action. */
 (() => {
+  const snapshot = document.querySelector('#publication-status time');
+  if (snapshot && Date.now() - Date.parse(snapshot.dateTime) > 24 * 60 * 60 * 1000) {
+    const status = snapshot.parentElement;
+    status.className = 'monitor-callout';
+    status.append(' · This edition is over a day old. Current service status is unknown.');
+  }
   const announce = document.getElementById('rating-announcement');
   function closeCard(container) {
     if (container.matches('details')) {

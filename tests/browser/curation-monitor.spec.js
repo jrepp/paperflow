@@ -29,3 +29,22 @@ test('curation monitor does not report perfect quality for an empty sample', asy
   await page.goto('/sources');
   await expect(page.getByRole('region',{name:'Research curation'})).toContainText('Quality estimate unavailable');
 });
+
+test('operations surfaces a curation incident and requests a bounded cycle', async({page})=>{
+  await page.route('**/health/ready', route=>route.fulfill({status:503,json:{
+    healthy:false, enabled:true, curation:{enabled:true,healthy:false,error:'CapacityExceededError'}}}));
+  await page.route('**/api/monitor/curation', route=>route.fulfill({json:{enabled:true}}));
+  await page.route('**/api/monitor/publication', route=>route.fulfill({json:{
+    status:'succeeded',service_status:'curation_delayed',built_at:'2026-11-20T18:00:00Z'}}));
+  await page.route('**/api/monitor/curation/runs', route=>{
+    expect(route.request().method()).toBe('POST');
+    return route.fulfill({status:202,json:{status:'requested'}});
+  });
+  await page.goto('/sources');
+  await expect(page.getByRole('heading',{name:'Operations'})).toBeVisible();
+  await expect(page.locator('#monitor-overview')).toContainText('Curation needs attention');
+  await expect(page.locator('#monitor-overview')).toContainText('Curation delayed');
+  await expect(page.locator('#sources-alert')).toContainText('CapacityExceededError');
+  await page.getByRole('button',{name:'Request curation cycle'}).click();
+  await expect(page.locator('#notice')).toContainText('Curation cycle requested');
+});
