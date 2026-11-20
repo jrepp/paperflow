@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import secrets
@@ -16,6 +17,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import AwareDatetime, BaseModel
 from typing import Literal
 
+from paperflow_monitor_models import PublicationStatus
 from paperflow_publish_site import build_site_from_storage
 
 
@@ -44,7 +46,8 @@ class BuildService:
     Status receipts survive process restarts. Interrupted jobs are recovered on
     read or the next build request without exposing incomplete staging output.
     """
-    def __init__(self, storage, settings, assistant_settings=None):
+    def __init__(self, storage, settings, assistant_settings=None, *, status_provider=None):
+        self.status_provider = status_provider
         self.assistant_settings = assistant_settings
         self.storage = storage
         self.settings = settings
@@ -103,6 +106,19 @@ class BuildService:
                     lock.close()
         return job
 
+    def publication_summary(self):
+        """Report the latest local build; the consumer promotes releases independently."""
+        job = self._active()
+        if job is None:
+            return {'status': 'no_build'}
+        job = self.get(job.id)
+        summary = {'status': job.status, 'requested_at': job.created_at}
+        if job.status == 'succeeded':
+            manifest = json.loads((self.releases / job.id.hex / 'build.json').read_text())
+            summary.update(built_at=manifest['created_utc'],
+                           service_status=PublicationStatus(manifest.get('service_status', 'unknown')))
+        return summary
+
     def request(self):
         lock = self._lock()
         if lock is None:
@@ -135,8 +151,14 @@ class BuildService:
             staging = Path(tempfile.mkdtemp(prefix='.staging-', dir=self.releases.parent))
             from paperflow_publish_site import _assistant_store
             assistant = _assistant_store(self.assistant_settings) if self.assistant_settings else None
+            status = PublicationStatus.UNKNOWN
+            if self.status_provider:
+                try:
+                    status = PublicationStatus(self.status_provider())
+                except Exception:
+                    logging.getLogger(__name__).warning('Publication status unavailable', exc_info=True)
             manifest = build_site_from_storage(self.storage, staging,
-                workspace_url=self.settings.workspace_url, assistant_store=assistant, releases_dir=self.settings.releases_dir)
+                publication_status=status, workspace_url=self.settings.workspace_url, assistant_store=assistant, releases_dir=self.settings.releases_dir)
             manifest['release_id'] = job.id.hex
             manifest['index_sha256'] = hashlib.sha256((staging / 'index.html').read_bytes()).hexdigest()
             _write_json(staging / 'build.json', manifest)

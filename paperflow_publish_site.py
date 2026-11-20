@@ -22,6 +22,7 @@ from importlib.resources import files
 
 from paperflow_domain import ContentRevision, Item
 from paperflow_ingest_models import SourceObservation
+from paperflow_monitor_models import PublicationStatus
 from paperflow_settings import PublishingSettings, load_research_settings
 from paperflow_storage_sqlite import SQLiteResearchStorage
 
@@ -69,7 +70,8 @@ def build_site_from_storage(storage: SQLiteResearchStorage, out_dir: str | Path,
                             window_hours: int = DEFAULT_WINDOW_HOURS,
                             per_channel_limit: int = DEFAULT_PER_CHANNEL_LIMIT,
                             now: datetime | None = None, workspace_url: str | None = None,
-                            assistant_store=None, releases_dir: Path | None = None) -> dict:
+                            assistant_store=None, releases_dir: Path | None = None,
+                            publication_status: PublicationStatus = PublicationStatus.UNKNOWN) -> dict:
     """Render the published bundle from an existing research storage."""
     workspace_url = PublishingSettings(workspace_url=workspace_url).workspace_url
     if not 1 <= window_hours <= 24 * 30:
@@ -121,6 +123,7 @@ def build_site_from_storage(storage: SQLiteResearchStorage, out_dir: str | Path,
     build_id = now.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     manifest = {
         "build_id": build_id,
+        "service_status": PublicationStatus(publication_status).value,
         "created_utc": now.astimezone(timezone.utc).isoformat(),
         "epoch": int(now.timestamp()),
         "policy": {"window_hours": window_hours, "per_channel_limit": per_channel_limit},
@@ -546,6 +549,14 @@ def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None =
     amount, unit = (hours // 24, 'day') if hours % 24 == 0 else (hours, 'hour')
     window = f"{amount} {unit}{'s' if amount != 1 else ''}"
     limit = manifest['policy']['per_channel_limit']
+    status = PublicationStatus(manifest.get('service_status', 'unknown'))
+    status_text = {
+        PublicationStatus.CURRENT: 'Updates were running normally.',
+        PublicationStatus.CURATION_DELAYED: 'Curation is delayed. Some stories may be missing analysis.',
+        PublicationStatus.DELAYED: 'Updates are delayed. Some stories or analyses may arrive late.',
+        PublicationStatus.UNKNOWN: 'Service status was unavailable.',
+    }[status]
+    status_class = 'monitor-callout' if status in (PublicationStatus.DELAYED, PublicationStatus.CURATION_DELAYED) else 'muted'
     parts = [
         '<!doctype html><html lang="en"><head>',
         '<meta charset="utf-8">',
@@ -560,6 +571,8 @@ def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None =
         'and browser request headers and stores the rating identifier without the raw inputs.</p></details></div></header>',
         '<main id="main" class="shell py-8" tabindex="-1">',
         '<h1>Latest Stories</h1>',
+        f'<p class="{status_class}" id="publication-status"><strong>{status_text}</strong> '
+        f'Status at publication · <time datetime="{now.isoformat()}">{now:%Y-%m-%d %H:%M UTC}</time></p>',
         '<p class="muted published-intro">Recent reading from all sources. <strong>AI curation</strong> · Ratings are pseudonymous.</p>',
         '<details class="rating-privacy"><summary>How stories are selected</summary>'
         f'<p>The feed selects up to {limit} recent items per source from the past {window}, '

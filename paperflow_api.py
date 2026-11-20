@@ -35,7 +35,7 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
     publisher = None
     if settings.publishing.build_api_enabled:
         from paperflow_publish_api import BuildService
-        publisher = BuildService(storage, settings.publishing, settings.assistant)
+        publisher = BuildService(storage, settings.publishing, settings.assistant, status_provider=monitor.publication_status)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -166,6 +166,10 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
         if not settings.monitor.enabled:
             raise HTTPException(503, "Monitor is disabled in this API process")
         return monitor.store.runs(limit)
+
+    @app.get("/api/monitor/publication", tags=["monitor"])
+    def publication_summary():
+        return publisher.publication_summary() if publisher else {"status": "disabled"}
 
     @app.get("/api/monitor/curation")
     def curation_metrics(days: int = Query(default=7, ge=1, le=365),

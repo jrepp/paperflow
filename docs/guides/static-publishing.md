@@ -121,3 +121,19 @@ address, User-Agent and Accept-Language using HMAC-SHA256. Its separate
 preserve continuity across restarts. Rating rows contain the pseudonym, target,
 version and vote. There is no reader account. A shared browser/network can share
 an identifier, and a network or browser change can produce another.
+
+## Reader and operator status
+
+Each edition records `service_status` in build.json and renders its meaning and
+UTC timestamp in the HTML. A build samples the monitor once. Curation failures
+can delay analysis even while the service accepts requests. Collection failures,
+stale scheduled feeds, and scheduler or topic failures can delay updates.
+Offline builds and unavailable monitors show unknown status. A browser opening
+an edition over a day old also flags its age. Detailed failure records stay in
+the live workspace.
+
+Open **Operations** at `/sources` in the live reader to inspect readiness, the
+running revision, the latest generated edition, queue counts and failure details.
+Request a bounded curation cycle there or inspect and operate individual feeds.
+The build receipt describes local generation. The publication consumer verifies
+and promotes the release independently.
