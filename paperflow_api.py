@@ -176,9 +176,13 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
                          planned_items_per_day: int | None = Query(default=None, ge=1, le=10000)):
         if not monitor.assistant:
             return {"enabled": False}
-        return {"enabled": True, **monitor.assistant.store.metrics(),
+        from paperflow_assistant.runtime import fingerprint
+        diagnostics = monitor.assistant.store.diagnostics(settings.assistant)
+        stages = monitor.assistant.store.pipeline_stages(fingerprint(settings.assistant),
+            overdue=monitor.health()['curation']['overdue'], budget_blocked=diagnostics['queue_blocked_reason'] == 'token_limit')
+        return {"enabled": True, **monitor.assistant.store.metrics(), "stages": stages,
                 "spend": monitor.assistant.store.spend(days, planned_items_per_day),
-                "diagnostics": monitor.assistant.store.diagnostics(settings.assistant),
+                "diagnostics": diagnostics,
                 "schedule": {"interval_seconds": settings.assistant.interval_seconds,
                              "items_per_cycle": settings.assistant.items_per_cycle,
                              "rolling_token_limit": settings.assistant.rolling_token_limit}}

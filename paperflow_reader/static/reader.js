@@ -216,8 +216,42 @@ async function research(generation) {
   if(!data.records.length) container.innerHTML='<div class="panel"><h2>Start with curiosity.</h2><p>Save interesting reading first. Research collections are separate from your everyday reading shelf.</p></div>';
   for(const bucket of data.records) {const el=document.createElement('article');el.className='panel';el.innerHTML=`<h2>${esc(bucket.title)}</h2><p>${esc(bucket.research_question)}</p><a class="control" href="/research/${bucket.id}">Read research brief</a>`;container.append(el);}
 }
+function renderPipeline(curation) {
+  if (!curation?.enabled) return curation ? '<p>Curation is disabled.</p>' : '<p>Pipeline status is unavailable.</p>';
+  const stages=curation.stages;
+  if (!stages?.length) return '<p>Stage measurements are unavailable.</p>';
+  const names={assessment:'Story assessment',analysis:'Curation analysis'};
+  const conditions={overdue:'Overdue run',failing:'Latest attempt failed',budget_blocked:'Waiting for token budget',
+    no_completions:'No completions in 24 hours',interrupted:'Latest attempt interrupted',running:'Running',
+    completing:'Completing work',waiting:'Queued',idle:'Idle'};
+  const issues=new Set(['overdue','failing','budget_blocked','no_completions','interrupted']);
+  const timestamp=value=>value?new Date(value*1000).toLocaleString():'None recorded';
+  const elapsed=value=>{
+    const minutes=Math.max(0,Math.floor((Date.now()/1000-value)/60));
+    if (minutes<1) return 'under a minute';
+    if (minutes<60) return `${minutes} min`;
+    return `${Math.floor(minutes/60)}h ${minutes%60}m`;
+  };
+  return stages.map(stage=>{
+    const counts=stage.attempts_24h, issue=issues.has(stage.condition);
+    const failure=stage.last_failure;
+    const limit=failure?.limit?` · ${esc(failure.phase)} · ${esc(failure.limit)} (${esc(failure.observed??'unknown')} / ${esc(failure.configured_limit??'unknown')})`:'';
+    const active=stage.active_item;
+    const message=stage.condition==='overdue'?'The worker exceeded its expected cycle time.':
+      stage.condition==='budget_blocked'?'Processing can resume when the rolling token budget has capacity.':
+      stage.condition==='no_completions'?'Work has been queued for at least a day without a successful attempt in the last 24 hours.':'';
+    return `<article class="panel"><h3>${esc(names[stage.stage]||stage.stage)}</h3>
+      <p class="${issue?'monitor-callout':'muted'}"><strong>${esc(conditions[stage.condition]||'Unknown')}</strong>${message?' · '+message:''}</p>
+      <p>Last 24 hours · ${esc(counts.succeeded)} succeeded · ${esc(counts.failed)} failed · ${esc(counts.interrupted)} interrupted</p>
+      <p>${esc(stage.queued)} queued${stage.oldest_queued_at?' · oldest waiting '+elapsed(stage.oldest_queued_at):''}${stage.running_since?' · active for '+elapsed(stage.running_since):''}</p>
+      ${active?`<p>Active item · <a href="/read/${encodeURIComponent(active.item_id)}">${esc(active.title)}</a></p>`: ''}
+      <p>Last success · ${esc(timestamp(stage.last_success_at))}</p>
+      ${failure?`<p>Last failure · ${esc(timestamp(failure.at))} · ${esc(failure.error||'Cause unavailable')}${limit}${stage.consecutive_failures_24h?' · '+esc(stage.consecutive_failures_24h)+' consecutive failures in 24h':''}</p>`:''}</article>`;
+  }).join('');
+}
+
 async function sources(generation) {
-  main.innerHTML=`<div class="sources-heading"><div><h1>Operations</h1><nav aria-label="Operations sections"><a href="#monitor-overview">Service health</a> · <a href="#curation-overview">Curation</a> · <a href="#source-list">Source feeds</a> · <a href="#recent-runs">Run history</a></nav></div><div class="sources-refresh"><button id="refresh-sources">Refresh status</button><span id="sources-updated" class="meta">Checking…</span></div></div><div id="sources-alert" aria-live="polite"></div><section id="monitor-overview" aria-label="Service health"></section><section id="curation-overview" class="panel" aria-label="Research curation"></section><div class="sources-section-heading"><h2>Source feeds</h2><span class="meta">Freshness reflects collection, not publication date.</span></div><div id="source-list" class="source-monitor-grid"></div><details id="recent-runs" class="run-history"><summary>Recent ingestion runs</summary><div id="run-history"></div></details>`;
+  main.innerHTML=`<div class="sources-heading"><div><h1>Operations</h1><nav aria-label="Operations sections"><a href="#pipeline-health">Pipeline health</a> · <a href="#curation-overview">Diagnostics</a> · <a href="#monitor-overview">Service health</a> · <a href="#source-list">Source feeds</a> · <a href="#recent-runs">Run history</a></nav></div><div class="sources-refresh"><button id="refresh-sources">Refresh status</button><span id="sources-updated" class="meta">Checking…</span></div></div><div id="sources-alert" aria-live="polite"></div><section id="pipeline-health" aria-labelledby="pipeline-title"><h2 id="pipeline-title">Curation pipeline</h2><div id="pipeline-stages" class="source-monitor-grid"></div></section><section id="monitor-overview" aria-label="Service health"></section><section id="curation-overview" class="panel" aria-label="Research curation"></section><div class="sources-section-heading"><h2>Source feeds</h2><span class="meta">Freshness reflects collection, not publication date.</span></div><div id="source-list" class="source-monitor-grid"></div><details id="recent-runs" class="run-history"><summary>Recent ingestion runs</summary><div id="run-history"></div></details>`;
   let loading=false,operating=false;
   const sourceName=name=>({'hackernews':'Hacker News','huggingface-papers':'Hugging Face Papers','lemmy-technology':'Lemmy · Technology','tildes-computing':'Tildes · Computing','mbin':'Mbin'}[name] || name);
   const stamp=value=>value?new Date(value).toLocaleString(): 'Not yet';
@@ -235,6 +269,7 @@ async function sources(generation) {
 
       const observed=observedResult.status==='fulfilled'?observedResult.value:[],channels=channelsResult.status==='fulfilled'?channelsResult.value:[],runs=runsResult.status==='fulfilled'?runsResult.value:[],health=healthResult.status==='fulfilled'?healthResult.value:null;
       const curation=curationResult.status==='fulfilled'?curationResult.value:null;
+      document.querySelector('#pipeline-stages').innerHTML=renderPipeline(curation);
       const version=versionResult.status==='fulfilled'?versionResult.value:null;
       const publication=publicationResult.status==='fulfilled'?publicationResult.value:null;
       const publicationLabel={succeeded:'Generated',running:'Building',failed:'Build failed',disabled:'Publisher disabled',no_build:'No build recorded'}[publication?.status]||'Status unavailable';

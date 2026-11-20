@@ -134,6 +134,11 @@ the live workspace.
 
 Open **Operations** at `/sources` in the live reader to inspect readiness, the
 running revision, the latest generated edition, queue counts and failure details.
+The pipeline lists story assessment and curation analysis in order of urgency.
+Each stage shows its current-harness queue, active item when available, oldest
+wait, successes, failures and interruptions over the last 24 hours, and most
+recent success and failure. Overdue work, failed attempts, budget blocks, and
+day-old queues with no completions appear ahead of stages completing work.
 Request a bounded curation cycle there or inspect and operate individual feeds.
 The build receipt describes local generation. The publication consumer verifies
 and promotes the release independently.
