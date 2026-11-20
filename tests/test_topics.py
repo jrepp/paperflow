@@ -188,3 +188,19 @@ def test_generic_headline_words_do_not_group_unrelated_articles(workspace):
     titles = {row.topic.title for row in service.summaries(at=at)}
     assert 'Down' not in titles and 'Story' not in titles
     assert 'Ground Stop' in titles
+
+
+def test_static_edition_offers_only_current_published_topics(workspace,tmp_path):
+    from paperflow_publish_site import build_site_from_storage
+    service,at = seeded(workspace)
+    service.curate(at=at)
+    topic = service.summaries(at=at)[0].topic
+    out = tmp_path / 'edition'
+    def render(at):
+        build_site_from_storage(workspace[1],out,now=at)
+        return (out / 'index.html').read_text()
+    option = f'<option value="topic:{topic.id}">{topic.title}</option>'
+    assert option in render(at)
+    assert option not in render(at+timedelta(hours=25))
+    service.edit(topic.id,EditTopic(expected_version=topic.version,editor='editor',editorial_status='suppressed'))
+    assert option not in render(at)

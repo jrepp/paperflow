@@ -94,6 +94,7 @@ class Context:
     public_analysis: bool = False
     failure: dict | None = None
     failure_exception: Exception | None = None
+    excerpt_only: bool = False
 
 
 def revision_passage(context, revision, start, length):
@@ -106,6 +107,8 @@ def revision_passage(context, revision, start, length):
     if any(left <= start and end <= right for left, right in ranges):
         return {**metadata, 'already_supplied': True, 'end': end,
                 'instruction': 'Use the exact passage already supplied in source_text or an earlier read_revision result.'}
+    if context.excerpt_only and revision.id == context.revision.id:
+        return {**metadata, 'available_ranges': ranges, 'instruction': 'Use the selected article passages and state any evidence gaps.'}
     text = revision.markdown[start:end]
     ranges.append((start, end))
     return {**metadata, 'text': text}
@@ -356,8 +359,11 @@ async def run_agent(context, item, reasoner, decision):
         return output
 
     rev = context.revision
-    included = min(len(rev.markdown), settings.source_character_limit)
-    context.supplied_passages[str(rev.id)] = [(0, included)]
+    from paperflow_assistant.evidence import source_ranges
+    ranges, method = await source_ranges(context, item, decision)
+    included = ranges[0][1]
+    context.excerpt_only = method != 'source_window'
+    context.supplied_passages[str(rev.id)] = list(ranges)
     prompt = {'task': TASK,
               'item': item, 'revision_id': str(rev.id), 'evidence_basis': rev.evidence_basis,
               'source_text': rev.markdown[:included],
@@ -368,6 +374,10 @@ async def run_agent(context, item, reasoner, decision):
               'open_follow_ups': [] if context.public_analysis else context.store.search_memory(item['title'], 'follow_up', 5),
               'run_id': context.job['id'], 'decision_depth_limit': settings.decision_depth,
               'story_context': context.story_context}
+    if context.excerpt_only:
+        prompt['selected_source_passages'] = [dict(start=a,end=b,text=rev.markdown[a:b]) for a,b in ranges[1:]]
+        prompt['task'] += (' Analyze only the selected excerpts. Use their original revision offsets when citing them. '
+                           'State what these passages cannot establish.')
     if context.story_context:
         prompt['task'] += (' Update the story account using the prior account and all supplied source evidence, '
             'including each pending material contribution. Cite each pending revision in the findings. Preserve still-supported findings and cite exact '
@@ -391,8 +401,9 @@ async def run_agent(context, item, reasoner, decision):
                 model_settings={'timeout': 30, 'max_retries': 0}, retries=1)
             try:
                 async with judge:
-                    audit = await judge.run(json.dumps({'source': rev.markdown[:settings.source_character_limit],
-                        'source_truncated': len(rev.markdown) > settings.source_character_limit,
+                    audit = await judge.run(json.dumps({'source': prompt['source_text'],
+                        'additional_passages': prompt.get('selected_source_passages', []),
+                        'source_truncated': prompt['source_truncated'],
                         'evidence_basis': rev.evidence_basis, 'categories': settings.categories,
                         'analysis': analysis.model_dump(mode='json')}),
                         usage=audit_usage, usage_limits=UsageLimits(request_limit=2,
@@ -407,6 +418,8 @@ async def run_agent(context, item, reasoner, decision):
                 context.usage.incr(audit_usage)
         usage = context.usage
         receipt = {key: getattr(usage, key, 0) for key in ('input_tokens', 'output_tokens', 'requests', 'tool_calls')}
+        if context.excerpt_only:
+            receipt['article_excerpt'] = {'method': method, 'ranges': ranges, 'supplied_characters': sum(b-a for a,b in ranges)}
         receipt.update(reasoning_model=response_model(result, settings.reasoning_model), prompt_version=PROMPT_VERSION,
                        phase_usage={'curation': curation_usage, 'evaluation': usage_snapshot(audit_usage)},
                        budgets={'curation': budget_snapshot(settings), 'evaluation': budget_snapshot(settings, 'evaluation')})

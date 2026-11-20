@@ -358,3 +358,14 @@ measurement, invented measurements with workflow text, and invented source layou
 The command exits unsuccessfully for any reference mismatch. Passing these checks
 establishes only reference agreement, not research accuracy. Evaluator v2 adds
 explicit criteria for workflow text and unsupported placement or layout claims.
+
+## Article excerpts
+
+For articles and discussion feeds, a source window over 8,000 characters triggers one metered
+decision-model call. The selector sees the lead and previews from up to 24
+blocks distributed across the configured window. The reasoning model receives
+the lead and up to three selected 2,000-character passages, with offsets in the
+original revision. The quality sample uses the same evidence. If selection
+fails, the lead, middle and ending blocks supply a bounded fallback.
+The run receipt records the selection method, ranges and character count.
+Papers continue to use the configured full source window and passage reads.
