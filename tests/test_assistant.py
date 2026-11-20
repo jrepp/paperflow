@@ -554,3 +554,26 @@ def test_wrapped_quotes_preserve_exact_source_and_reject_changed_words(tmp_path)
     for quote in ('The study did improve latency.', 'A  result.'):
         with pytest.raises(ValueError):
             validate_citations([Citation(revision_id=rev.id, quote=quote)], storage)
+
+
+def test_stage_health_prioritizes_overdue_and_keeps_success_evidence(tmp_path):
+    from paperflow_assistant.store import AssistantStore, assessment_key
+
+    store = AssistantStore(tmp_path/'stages.db')
+    store.initialize()
+    now = time.time()
+    story = assessment_key('active', 'r')
+    with store.connection(True) as conn:
+        conn.executemany("INSERT INTO assistant_jobs(id,revision_id,fingerprint,status,started_at,queued_at) VALUES (?,?,?,?,?,?)",
+            [(story,'r','active','running',now-900,now-1000),('analysis','r','active','succeeded',now-3600,now-4000),
+             ('backlog','z','active','queued',None,now-1800),('obsolete','r','old','queued',None,now-999999)])
+        conn.execute("INSERT INTO assistant_story_jobs(job_id,revision_id) VALUES (?,?)",(story,'r'))
+        conn.executemany("INSERT INTO assistant_attempts(job_id,attempt,status,finished_at,error) VALUES (?,?,?,?,?)",
+            [(story,1,'failed',now-1800,'CapacityExceededError'),('analysis',1,'succeeded',now-3000,None)])
+    stages = store.pipeline_stages('active', overdue=True, budget_blocked=False, now=now)
+    assert [(s['stage'],s['condition']) for s in stages] == [('assessment','overdue'),('analysis','completing')]
+    assert stages[0]['running_since'] == now-900
+    assert stages[0]['last_failure']['error'] == 'CapacityExceededError'
+    assert stages[1]['attempts_24h']['succeeded'] == stages[1]['queued'] == 1
+    assert stages[1]['oldest_queued_at'] == now-1800
+    assert store.pipeline_stages('active',overdue=False,budget_blocked=True,now=now)[1]['condition'] == 'budget_blocked'
