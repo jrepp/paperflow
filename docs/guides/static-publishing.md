@@ -142,3 +142,14 @@ day-old queues with no completions appear ahead of stages completing work.
 Request a bounded curation cycle there or inspect and operate individual feeds.
 The build receipt describes local generation. The publication consumer verifies
 and promotes the release independently.
+
+Use **Topic or source** and **Type** above the public feed to narrow an edition.
+Choose **Papers** to read papers across sources. A curated story matches when
+one of its selected sources meets both filters. The URL retains the selection
+for bookmarks, reloads and browser history. Filtering works within a downloaded
+edition without a connection. With JavaScript disabled the complete edition
+remains readable.
+
+Operations opens on Pipeline health. The section links open individual panes
+for diagnostics, quality, usage and spend, service health, feed administration,
+and ingestion history. Each pane can be bookmarked.

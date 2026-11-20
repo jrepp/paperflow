@@ -46,7 +46,8 @@ class BuildService:
     Status receipts survive process restarts. Interrupted jobs are recovered on
     read or the next build request without exposing incomplete staging output.
     """
-    def __init__(self, storage, settings, assistant_settings=None, *, status_provider=None):
+    def __init__(self, storage, settings, assistant_settings=None, *, status_provider=None, topic_settings=None):
+        self.topic_settings = topic_settings
         self.status_provider = status_provider
         self.assistant_settings = assistant_settings
         self.storage = storage
@@ -158,7 +159,7 @@ class BuildService:
                 except Exception:
                     logging.getLogger(__name__).warning('Publication status unavailable', exc_info=True)
             manifest = build_site_from_storage(self.storage, staging,
-                publication_status=status, workspace_url=self.settings.workspace_url, assistant_store=assistant, releases_dir=self.settings.releases_dir)
+                publication_status=status, topic_settings=self.topic_settings, workspace_url=self.settings.workspace_url, assistant_store=assistant, releases_dir=self.settings.releases_dir)
             manifest['release_id'] = job.id.hex
             manifest['index_sha256'] = hashlib.sha256((staging / 'index.html').read_bytes()).hexdigest()
             _write_json(staging / 'build.json', manifest)
