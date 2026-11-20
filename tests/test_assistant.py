@@ -599,7 +599,7 @@ def test_long_article_excerpts_are_metered_exact_and_bounded(tmp_path, kind):
         prompt = next(json.loads(p.content) for m in messages for p in m.parts if isinstance(p, UserPromptPart))
         ids = list(prompt['previews'])
         assert len(ids) <= 24
-        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name,{'blocks':[ids[-1]]})])
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name,{'report':ids[-1], 'evidence':ids[-1], 'qualification':ids[-1]})])
     def reason(messages, info):
         prompt = next(json.loads(p.content) for m in messages for p in m.parts if isinstance(p, UserPromptPart))
         assert prompt['source_text'] == text[:2000]
