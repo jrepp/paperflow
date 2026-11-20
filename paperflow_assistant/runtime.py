@@ -357,17 +357,29 @@ async def run_agent(context, item, reasoner, decision):
 
     rev = context.revision
     included = min(len(rev.markdown), settings.source_character_limit)
-    context.supplied_passages[str(rev.id)] = [(0, included)]
+    from paperflow_assistant.evidence import select_evidence
+    selected = (await select_evidence(context, decision, rev.markdown[:included])
+                if settings.evidence_selection_enabled else None)
+    ranges = selected or [(0, included)]
+    context.supplied_passages[str(rev.id)] = ranges
+    first_end = ranges[0][1]
     prompt = {'task': TASK,
               'item': item, 'revision_id': str(rev.id), 'evidence_basis': rev.evidence_basis,
-              'source_text': rev.markdown[:included],
-              'source_included_range': [0, included], 'source_truncated': included < len(rev.markdown),
+              'source_text': rev.markdown[:first_end],
+              'source_included_range': [0, first_end],
+              'selected_source_passages': [{'start': start, 'end': end, 'text': rev.markdown[start:end]}
+                                           for start, end in ranges[1:]],
+              'source_truncated': sum(end - start for start, end in ranges) < len(rev.markdown),
               'budget': budget_snapshot(settings),
               'source_total_characters': len(rev.markdown), 'categories': settings.categories,
               'relevant_insights': [] if context.public_analysis else context.store.search_memory(item['title'], 'insight', 5),
               'open_follow_ups': [] if context.public_analysis else context.store.search_memory(item['title'], 'follow_up', 5),
               'run_id': context.job['id'], 'decision_depth_limit': settings.decision_depth,
               'story_context': context.story_context}
+    if selected:
+        prompt['task'] += (' The source passages are selected excerpts, not complete coverage. '
+            'Each selected_source_passages entry gives its exact original offsets. Read other passages if needed, '
+            'and state the limits of incomplete coverage.')
     if context.story_context:
         prompt['task'] += (' Update the story account using the prior account and all supplied source evidence, '
             'including each pending material contribution. Cite each pending revision in the findings. Preserve still-supported findings and cite exact '
