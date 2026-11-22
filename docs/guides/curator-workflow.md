@@ -374,3 +374,21 @@ Remaining gaps exposed by the journey:
   are now supported with version checks and audit history.
 - Reddit live ingestion remains blocked on API approval. Legacy arXiv/Hugging
   Face radar commands are separate from these four monitored feed integrations.
+
+## Threads of study
+
+During source assessment the curator can open a recurring research question or
+add a reading to an existing question. For example, two reports on different
+retrieval benchmarks may belong to separate stories while both contributing to
+“How does retrieval latency change as the index grows?” A source can also add a
+reading while its story assessment is unresolved.
+
+The curator sees up to eight existing questions and reuses the wording when a
+reading belongs to one. Each reading records what the source contributes and an
+exact passage from its revision. The assessment and reading are saved together.
+New assessments can start threads immediately. Completed assessments retain
+their original decisions.
+
+The published feed links to **Threads of study** when a selected source contributes
+a reading. Expand a question to read its public sources in the order they were
+added, including older readings outside the current feed window.
