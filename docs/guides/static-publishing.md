@@ -75,10 +75,10 @@ running a separate scheduled exporter into the service-managed releases tree.
 
 ## Stories and source disclosure
 
-The edition opens with up to three stories, ordered by their last material update.
-Threads of study follow the lead stories, then the remaining stories and the
-source feed. When no stories qualify, the edition opens with the available
-threads or sources. Select a thread question to read its contributions in order
+Stories, Threads, and Sources each have their own view in the edition. The
+home view lists stories by their last material update. If an edition has no
+stories, it opens with threads or sources, whichever is available.
+Select a thread question to read its contributions in order
 and expand the supporting passages. A story account links to a thread when
 they share a public source revision in this edition.
 Open **Sources** to inspect all attached sources, their assessed contributions,
@@ -148,7 +148,7 @@ Request a bounded curation cycle there or inspect and operate individual feeds.
 The build receipt describes local generation. The publication consumer verifies
 and promotes the release independently.
 
-Use **Browse sources**, then **Topic or source** and **Type** to narrow the source feed.
+Use **Sources**, then **Topic or source** and **Type** to narrow the source feed.
 Choose **Papers** to read papers across sources. A matching source links to any published story it contributes to. The URL retains the selection
 for bookmarks, reloads and browser history. Filtering works within a downloaded
 edition without a connection. With JavaScript disabled the complete edition

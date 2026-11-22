@@ -451,8 +451,7 @@ def test_story_order_uses_material_change_not_repeat_arrival(tmp_path, monkeypat
     page = (tmp_path / 'site' / 'index.html').read_text()
     lead = page.split('<section id="stories">')[1].split('</section>')[0]
     assert lead.index('Newer material story') < lead.index('Older material story') < lead.index('Third story')
-    assert 'Fourth story' not in lead
-    assert page.index('<h2>More stories</h2>') < page.index('Fourth story') < page.index('<section id="source-feed">')
+    assert lead.index('Third story') < lead.index('Fourth story')
 
 
 def test_published_markdown_renders_prose_without_executable_html():

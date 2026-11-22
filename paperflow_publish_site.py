@@ -2,7 +2,7 @@
 
 Renders a standalone static site. Each ingestion channel contributes its freshest items up to
 a balanced per-channel cap; items older than the decay window leave the
-channels. The edition leads with stories and threads, then interleaves source feeds.
+channels. The edition opens its first available view: stories, threads, or sources.
 Output is one self-contained index.html plus build.json carrying the build
 identity, the applied policy, and per-channel counts.
 """
@@ -420,7 +420,7 @@ def _story_document(row, threads):
     for thread in threads:
         if revisions.intersection(thread['revision_ids']):
             body += f'<p>Thread of study · <a href="#study-{thread["id"]}">{html.escape(thread["question"])}</a></p>'
-    return _document_shell(f'story-account-{story.id}', f'story-{story.id}', 'Back to story',
+    return _document_shell(f'story-account-{story.id}', f'story-{story.id}', 'Back to stories',
         story.title, story.account, body,
         f'story-{story.id}.md', 'Story and curation', 'story', story.id, story.version)
 
@@ -613,6 +613,11 @@ def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None =
         PublicationStatus.DELAYED: 'Updates are delayed. Some stories or analyses may arrive late.',
         PublicationStatus.UNKNOWN: 'Service status was unavailable.',
     }[status]
+    views = [(anchor, label) for anchor, label, content in (
+        ('stories', 'Stories', stories), ('study-threads', 'Threads', study_threads),
+        ('source-feed', 'Sources', latest),
+    ) if content]
+    home = views[0][0] if views else 'main'
     status_class = 'monitor-callout' if status in (PublicationStatus.DELAYED, PublicationStatus.CURATION_DELAYED) else 'muted'
     parts = [
         '<!doctype html><html lang="en"><head>',
@@ -622,44 +627,31 @@ def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None =
         "<style>" + stylesheet + "</style></head><body class=\"published-page\">",
         '<a class="skip" href="#main">Skip to content</a>',
         '<header class="masthead"><div class="shell topbar">'
-        '<a href="./" class="brand" aria-label="Paperflow home">Paperflow</a>'
+        f'<a href="#{home}" class="brand" aria-label="Paperflow home">Paperflow</a>'
         '<nav class="edition-nav" aria-label="Edition">',
     ]
-    if stories:
-        parts.append('<a href="#stories">Stories</a>')
-    if study_threads:
-        parts.append('<a href="#study-threads">Threads of study</a>')
-    if latest:
-        parts.append('<a href="#source-feed">Browse sources</a>')
+    parts.extend(f'<a href="#{anchor}">{label}</a>' for anchor, label in views)
     parts.append('</nav></div></header><main id="main" class="shell py-8" tabindex="-1">')
     anchors = {item.id for _, item, _ in latest}
     curation_anchors = set()
     stories_by_item = {}
-    story_rows = []
-    for row in stories:
-        story_rows.append(_story_row(row, now, anchors, curation_anchors))
-        for entry in row['sources']:
-            stories_by_item.setdefault(entry['item'].id, []).append(row['story'])
     if stories:
         parts.append('<section id="stories"><h1>Latest Stories</h1><ol class="feed-list" role="list">')
-        parts.extend(story_rows[:3])
+        for row in stories:
+            parts.append(_story_row(row, now, anchors, curation_anchors))
+            for entry in row['sources']:
+                stories_by_item.setdefault(entry['item'].id, []).append(row['story'])
         parts.append('</ol></section>')
     if study_threads:
-        heading = 'h2' if stories else 'h1'
-        parts.append(f'<section id="study-threads"><{heading}>Threads of study</{heading}><ul class="thread-questions">')
+        parts.append('<section id="study-threads"><h1>Threads of study</h1><ul class="thread-questions">')
         for thread in study_threads:
             anchor = 'study-' + thread['id']
             count = len(thread['readings'])
             parts.append(f'<li><a id="link-{anchor}" href="#{anchor}">{esc(thread["question"])}</a> '
                          f'<span class="muted">{count} {"reading" if count == 1 else "readings"}</span></li>')
         parts.append('</ul></section>')
-    if len(story_rows) > 3:
-        parts.append('<section><h2>More stories</h2><ol class="feed-list" role="list">')
-        parts.extend(story_rows[3:])
-        parts.append('</ol></section>')
     if latest:
-        heading = 'h2' if stories or study_threads else 'h1'
-        parts.append(f'<section id="source-feed"><{heading}>Source feed</{heading}>')
+        parts.append('<section id="source-feed"><h1>Source feed</h1>')
         source_options = ''.join(f'<option value="channel:{esc(c["name"], quote=True)}">{esc(c["name"])}</option>'
                                  for c in manifest["channels"])
         topic_options = ''.join(f'<option value="topic:{esc(key, quote=True)}">{esc(title)}</option>'

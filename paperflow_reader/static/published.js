@@ -42,9 +42,26 @@
     filters.hidden = false;
     const params = new URLSearchParams(location.search);
     if (!location.hash && ['channel', 'topic', 'kind'].some(key => params.has(key))) {
-      document.getElementById('source-feed').scrollIntoView();
+      location.replace('#source-feed');
     }
   }
+  const navigation = document.querySelector('.edition-nav');
+  function updateNavigation() {
+    const target = document.getElementById(location.hash.slice(1));
+    const view = target?.closest('main > section') || document.querySelector('main > section');
+    if (!view) return;
+    const back = view.querySelector(':scope > .document-back');
+    const list = back ? document.getElementById(back.hash.slice(1))?.closest('main > section') : view;
+    for (const link of navigation.querySelectorAll('a')) {
+      if (link.hash === '#' + list?.id) link.setAttribute('aria-current', back ? 'location' : 'page');
+      else link.removeAttribute('aria-current');
+    }
+    document.title = view.querySelector('h1').textContent + ' · Paperflow';
+    document.querySelector('.skip').hash = view.id;
+    if (back && target === view) back.focus({preventScroll:true});
+  }
+  updateNavigation();
+  window.addEventListener('hashchange', updateNavigation);
   const snapshot = document.querySelector('#publication-status time');
   if (snapshot && Date.now() - Date.parse(snapshot.dateTime) > 24 * 60 * 60 * 1000) {
     const status = snapshot.parentElement;
