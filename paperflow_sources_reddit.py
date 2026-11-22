@@ -108,7 +108,7 @@ class RedditTransport:
                 429: "Reddit rate limited the probe; retry after the upstream reset.",
             }
             raise RedditAccessError(messages.get(exc.code, f"Reddit returned HTTP {exc.code}.")) from None
-        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        except (urllib.error.URLError, TimeoutError, ValueError):
             raise RedditAccessError("Reddit request failed or returned an invalid response.") from None
 
 

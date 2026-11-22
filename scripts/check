@@ -33,10 +33,16 @@ for name in set(paths.decode().split("\0")):
 PYTHON
     gitleaks dir "$snapshot" --config .gitleaks.toml --redact --no-banner --verbose
     ;;
-  code)
+  lint) run ruff check . ;;
+  types) run mypy ;;
+  tests)
     uv lock --check
-    run ruff check .
     run python scripts/acceptance.py --suite --backend-only
+    ;;
+  code)
+    "$0" lint
+    "$0" types
+    "$0" tests
     ;;
   acceptance) run python scripts/acceptance.py ;;
   docs)
@@ -75,5 +81,5 @@ PYTHON
     "$0" workflows
     "$0" release
     ;;
-  *) echo "Usage: scripts/check [all|security|code|acceptance|docs|reader|browser|workflows|release|integration]" >&2; exit 2 ;;
+  *) echo "Usage: scripts/check [all|security|code|lint|types|tests|acceptance|docs|reader|browser|workflows|release|integration]" >&2; exit 2 ;;
 esac

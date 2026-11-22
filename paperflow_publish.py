@@ -184,7 +184,7 @@ def propose_publishing_threads(
             token_to_papers[token].append(paper)
 
     topics = []
-    for token, count in token_counts.most_common(limit * 4):
+    for token, _ in token_counts.most_common(limit * 4):
         candidates = sorted(
             token_to_papers[token],
             key=lambda item: (

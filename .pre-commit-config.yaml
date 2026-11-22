@@ -8,9 +8,21 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: paperflow-lint
+        name: Python correctness and bug patterns
+        entry: scripts/check lint
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: paperflow-types
+        name: Strict types for research domain models
+        entry: scripts/check types
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: paperflow-code
-        name: Python lint, lockfile, and unit tests
-        entry: scripts/check code
+        name: Python lockfile, unit and backend acceptance tests
+        entry: scripts/check tests
         language: system
         pass_filenames: false
         always_run: true

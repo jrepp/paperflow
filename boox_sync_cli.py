@@ -62,7 +62,7 @@ def _run_boox_async(coro: object) -> int:
             err=True,
         )
         typer.secho(f"Last error: {exc}", fg=typer.colors.YELLOW, err=True)
-        raise typer.Exit(2)
+        raise typer.Exit(2) from None
 
 
 @app.command("inventory")
