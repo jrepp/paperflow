@@ -363,20 +363,25 @@ async def run_agent(context, item, reasoner, decision):
     from paperflow_assistant.evidence import source_ranges
     ranges, method = await source_ranges(context, item, decision)
     included = ranges[0][1]
-    context.excerpt_only = method != 'source_window'
+    context.excerpt_only = method in {'bounded_excerpt', 'decision_excerpt', 'fallback_excerpt'}
     context.supplied_passages[str(rev.id)] = list(ranges)
     prompt = {'task': TASK,
               'item': item, 'revision_id': str(rev.id), 'evidence_basis': rev.evidence_basis,
               'source_text': rev.markdown[:included],
-              'source_included_range': [0, included], 'source_truncated': included < len(rev.markdown),
+              'source_included_range': [0, included],
+              'source_truncated': sum(end - start for start, end in ranges) < len(rev.markdown),
               'budget': budget_snapshot(settings),
               'source_total_characters': len(rev.markdown), 'categories': settings.categories,
               'relevant_insights': [] if context.public_analysis else context.store.search_memory(item['title'], 'insight', 5),
               'open_follow_ups': [] if context.public_analysis else context.store.search_memory(item['title'], 'follow_up', 5),
               'run_id': context.job['id'], 'decision_depth_limit': settings.decision_depth,
               'story_context': context.story_context}
-    if context.excerpt_only:
+    if method != 'source_window':
         prompt['selected_source_passages'] = [dict(start=a,end=b,text=rev.markdown[a:b]) for a,b in ranges[1:]]
+    if method == 'selected_evidence':
+        prompt['task'] += (' Cite selected passages using their original offsets. Read additional passages as needed, '
+                           'and state the limits of incomplete coverage.')
+    elif context.excerpt_only:
         prompt['task'] += (' Analyze only the selected excerpts. Use their original revision offsets when citing them. '
                            'State what these passages cannot establish.')
     if context.story_context:

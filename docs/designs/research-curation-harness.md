@@ -368,4 +368,13 @@ the lead and up to three selected 2,000-character passages, with offsets in the
 original revision. The quality sample uses the same evidence. If selection
 fails, the lead, middle and ending blocks supply a bounded fallback.
 The run receipt records the selection method, ranges and character count.
-Papers continue to use the configured full source window and passage reads.
+
+For papers, manuscripts, and notes with a source window over 30,000 characters,
+the decision model selects up to five exact 6,000-character blocks, including
+the beginning, for the first reasoning turn. The reasoning model can request
+additional passages and must state the limits of incomplete coverage. Citations
+are verified against the original revision. Invalid or failed selection falls
+back to the configured source window. Set
+`research.assistant.evidence_selection_enabled` to false to disable this step.
+Selection and reasoning usage are metered separately. Compare actual costs and
+quality before assuming savings, since cached reasoning input can be inexpensive.
