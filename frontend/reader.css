@@ -207,7 +207,7 @@ button,.control,nav a,.brand { max-width:100%; overflow-wrap:anywhere; white-spa
 .curation-body dt { color:var(--muted); font-size:.8rem; }
 .curation-body dd { margin:0; }
 .curation-links a { display:inline-block; padding-block:.5rem; }
-.curation-document { display:none; margin-block:2rem; padding:1.25rem; border:1px solid var(--line); border-radius:.5rem; }
+.curation-document { display:none; }
 .curation-document:target { display:block; }
 .curation-document h2 { margin-top:1rem; }
 .curation-document pre { white-space:pre-wrap; overflow-wrap:anywhere; font: .95rem/1.7 ui-monospace,monospace; margin-top:1rem; }
@@ -313,7 +313,7 @@ button,.control,nav a,.brand { max-width:100%; overflow-wrap:anywhere; white-spa
 
 .edition-nav { display:flex; gap:.25rem 1rem; flex-wrap:wrap; }
 .edition-nav a { display:inline-flex; align-items:center; min-height:44px; color:var(--accent); }
-.published-page main > section + section { margin-top:2.25rem; }
+.edition-nav a[aria-current] { background:var(--tint); color:var(--accent); box-shadow:inset 0 -2px var(--accent); }
 .published-page main > section > h1 { font:700 clamp(1.85rem,4vw,2.6rem)/1.2 Georgia,serif; }
 .published-page main > section > h2 { font:700 1.6rem/1.3 Georgia,serif; }
 .published-page #stories .feed-row:first-child h2 { font-size:clamp(1.55rem,3vw,2.1rem); }
@@ -327,7 +327,14 @@ button,.control,nav a,.brand { max-width:100%; overflow-wrap:anywhere; white-spa
 .thread-readings p,.thread-readings blockquote { margin:.5rem 0; line-height:1.6; }
 .thread-readings blockquote { padding-inline-start:1rem; border-left:2px solid var(--line); }
 .thread-readings summary,.thread-readings a { color:var(--accent); }
-.published-page main:has(> .curation-document:target) > section:not(:target) { display:none; }
+/* Native fragment links also select the surrounding list when returning to a card. */
+.published-page main > section { display:none; scroll-margin-block-start:12rem; }
+.published-page main:not(:has(> section:target, > section :target)) > section:first-of-type,
+.published-page main > section:target,
+.published-page main > section:has(:target) { display:block; }
+.published-page .curation-document { margin-block:0 3rem; }
+.published-page .curation-document:focus { outline:none; }
+.published-page .curation-document:focus-visible > .document-back { outline:3px solid var(--accent); outline-offset:3px; }
 @media(max-width:600px) {
   .published-page .topbar { flex-wrap:wrap; gap:0 1rem; }
 }
