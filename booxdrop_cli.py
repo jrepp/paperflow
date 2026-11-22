@@ -1770,7 +1770,7 @@ async def extract_markdown_from_pdf(
     output_path = markdown_cache_path(markdown_cache_dir, entry)
 
     if db_path and arxiv_id:
-        from radar_db import get_db as _gdb, get_extraction as _ge, upsert_extraction as _ue, ExtractionRecord as _ER
+        from radar_db import get_db as _gdb, get_extraction as _ge
         with _gdb(db_path) as _conn:
             existing = _ge(_conn, arxiv_id, resolved_id=resolved_id)
         if existing and existing["status"] == "completed":
@@ -1900,7 +1900,7 @@ async def run_opencode_json(
     payload = "".join(texts)
     try:
         return parse_model_json(payload)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as parse_error:
         retry_prompt = (
             "The previous response could not be parsed as valid JSON. "
             "Return only one valid JSON object, with all string newlines and backslashes escaped correctly. "
@@ -1923,7 +1923,7 @@ async def run_opencode_json(
         if retry_process.returncode != 0:
             raise RuntimeError(
                 f"opencode run failed with {retry_process.returncode}: {retry_stderr.decode('utf-8', errors='replace')}"
-            )
+            ) from parse_error
         retry_texts: list[str] = []
         for raw_line in retry_stdout.decode("utf-8", errors="replace").splitlines():
             line = raw_line.strip()
@@ -2568,7 +2568,6 @@ def render_paper_chapter(entry: dict, summary: dict, foundational_refs: list[dic
     framing = latex_escape(str(summary.get("intake_framing", "")))
     citation_signal = latex_escape(str(summary.get("citation_signal", "")))
     abs_url = str(entry.get("abs_url", ""))
-    pdf_url = str(entry.get("pdf_url", ""))
 
     lines = [
         r"\section*{" + f"{title}" + "}",

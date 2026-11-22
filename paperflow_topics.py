@@ -1,6 +1,7 @@
 """Rolling editorial topic curation with a replaceable, local proposal strategy."""
 from collections import Counter
 from datetime import timedelta
+from itertools import pairwise
 import hashlib
 import re
 from typing import Protocol
@@ -43,7 +44,7 @@ class KeywordTopicCurator:
         for candidate in candidates:
             words=tokens(candidate.title)
             phrases={word for word in words if word not in LOW_SIGNAL_SINGLETONS}
-            phrases.update(' '.join(pair) for pair in zip(words,words[1:]))
+            phrases.update(' '.join(pair) for pair in pairwise(words))
             features[candidate.item_id]=phrases
             for phrase in phrases:
                 labels.setdefault(phrase,phrase)
