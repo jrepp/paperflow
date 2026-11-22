@@ -52,6 +52,7 @@ class AssistantSettings(StrictModel):
     evaluation_sample_rate: float = Field(default=0.2, ge=0, le=1)
     evaluation_token_limit: int = Field(default=32000, ge=1000, le=100000)
     source_character_limit: int = Field(default=120000, ge=1000, le=200000)
+    evidence_selection_enabled: bool = True
     categories: list[str] = Field(default_factory=lambda: [
         "artificial-intelligence", "computing", "science", "engineering", "society", "other",
     ], min_length=1, max_length=50)
