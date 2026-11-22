@@ -56,6 +56,18 @@ CREATE INDEX IF NOT EXISTS story_assessment_story ON research_story_assessments(
 CREATE TABLE IF NOT EXISTS research_story_sources (story_id TEXT NOT NULL REFERENCES research_stories(id), item_id TEXT NOT NULL REFERENCES research_items(id), payload TEXT NOT NULL, PRIMARY KEY(story_id,item_id));
 CREATE TABLE IF NOT EXISTS research_story_pending (assessment_id TEXT PRIMARY KEY REFERENCES research_story_assessments(id), story_id TEXT NOT NULL REFERENCES research_stories(id));
 
+CREATE TABLE IF NOT EXISTS research_study_threads (
+ id TEXT PRIMARY KEY, question TEXT NOT NULL, seed_revision_id TEXT NOT NULL REFERENCES research_revisions(id)
+);
+CREATE TABLE IF NOT EXISTS research_study_readings (
+ thread_id TEXT NOT NULL REFERENCES research_study_threads(id),
+ revision_id TEXT NOT NULL REFERENCES research_revisions(id),
+ assessment_id TEXT NOT NULL UNIQUE REFERENCES research_story_assessments(id),
+ contribution TEXT NOT NULL, passage TEXT NOT NULL, PRIMARY KEY(thread_id,revision_id)
+);
+
+CREATE INDEX IF NOT EXISTS study_reading_revision ON research_study_readings(revision_id);
+
 CREATE TABLE IF NOT EXISTS editorial_topics (
  id TEXT PRIMARY KEY, topic_key TEXT NOT NULL UNIQUE, payload TEXT NOT NULL
 );
