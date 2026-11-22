@@ -95,6 +95,7 @@ class Context:
     failure: dict | None = None
     failure_exception: Exception | None = None
     excerpt_only: bool = False
+    study_questions: list[str] = field(default_factory=list)
 
 
 def revision_passage(context, revision, start, length):
@@ -484,7 +485,7 @@ class AssistantWorker:
     def _assess_revision(self, context, item, start):
         job = context.job
         from paperflow_assistant.stories import (RULE_VERSION, AssessmentDecision, AssessmentFinding, choose_category,
-                                                RepeatReview, assess, review_repeat,
+                                                RepeatReview, assess, evidence_passages, review_repeat,
                                                 validate_decision, account_markdown)
         from paperflow_story_models import Story, StoryAssessment, StoryFinding
         from paperflow_story_vectors import semantic_candidates
@@ -494,6 +495,7 @@ class AssistantWorker:
         semantic = semantic_candidates(item['title'] + '\n' + context.revision.markdown[:4000],
             documents, index_path=self.settings.path.with_suffix('.stories.mv2'), weeks=self.settings.story_search_weeks)
         with self.storage.transaction() as repo:
+            context.study_questions = repo.study_questions(item['title'] + ' ' + context.revision.markdown[:4000])
             candidates = []
             for candidate in repo.story_candidates(context.revision.id, semantic_ids=semantic):
                 if any(not repo.is_public_revision(a.revision_id) for a in repo.story_assessments(story_id=candidate.story.id)):
@@ -528,6 +530,7 @@ class AssistantWorker:
             if (decision.outcome != 'unresolved' and len(context.revision.markdown.split()) < 10
                     and not (decision.outcome == 'repeated_coverage' and same_origin)):
                 decision = AssessmentDecision.model_validate({'outcome': 'unresolved', 'story_id': decision.story_id,
+                    'study_reading': decision.study_reading,
                     'findings': [{'rule_id': 'insufficient-text', 'result': 'unresolved',
                         'rationale': 'The source text is too short to establish its contribution.',
                         'missing_evidence': 'A fuller source revision is needed.'}]})
@@ -592,9 +595,14 @@ class AssistantWorker:
                 creator=self.settings.reasoning_model, creator_kind='processor',
                 processor_version=fingerprint(self.settings), rule_set_version=RULE_VERSION,
                 processing_run_id=uuid5(NAMESPACE_URL, job['id']))
+            study_reading = None
+            if reading := decision.study_reading:
+                passage = evidence_passages(context.revision.markdown)[reading.passage_id]
+                study_reading = (reading.question, reading.contribution, passage)
             with self.storage.transaction(write=True) as repo:
                 assessment = repo.apply_story_assessment(assessment,
-                    story=Story(title=item['title']) if decision.outcome == 'new_story' else None)
+                    story=Story(title=item['title']) if decision.outcome == 'new_story' else None,
+                    study_reading=study_reading)
         # Existing successful source analyses can seed a new story without another model run.
         already_published = False
         if assessment.outcome == 'new_story':

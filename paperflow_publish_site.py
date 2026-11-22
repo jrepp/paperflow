@@ -81,6 +81,7 @@ def build_site_from_storage(storage: SQLiteResearchStorage, out_dir: str | Path,
     now = now or datetime.now(timezone.utc)
     cards = {}
     stories = []
+    study_threads = []
     with storage.transaction() as repo:
         sections = publication_sections(repo, now=now, window_hours=window_hours,
                                         per_channel_limit=per_channel_limit)
@@ -104,6 +105,7 @@ def build_site_from_storage(storage: SQLiteResearchStorage, out_dir: str | Path,
         story_items = set()
         if hasattr(repo, "story_schema_available") and repo.story_schema_available():
             stories = _story_projection(repo, selected_ids)
+            study_threads = repo.published_study_threads(selected_ids)
             story_items = repo.story_associated_items()
         manifest_sections = [{"name": section["name"], "count": len(section["items"])} for section in sections]
         attached = {source["item"].id for story in stories for source in story["sources"]}
@@ -146,10 +148,11 @@ def build_site_from_storage(storage: SQLiteResearchStorage, out_dir: str | Path,
         "channels": manifest_sections,
         "total_items": sum(section["count"] for section in manifest_sections),
         "total_stories": len(stories),
+        "total_study_threads": len(study_threads),
     }
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "index.html").write_text(_render(sections, manifest, workspace_url=workspace_url, cards=cards, stories=stories,
+    (out / "index.html").write_text(_render(sections, manifest, workspace_url=workspace_url, cards=cards, stories=stories, study_threads=study_threads,
                                          filters_by_item=filters_by_item, topic_titles=topic_titles), encoding="utf-8")
     (out / "build.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return manifest
@@ -362,6 +365,22 @@ def _story_row(row, now, anchors, filters):
     return ''.join(parts)
 
 
+def _study_thread(thread):
+    anchor = 'study-' + thread['id']
+    question = html.escape(thread['question'])
+    readings = thread['readings']
+    count = f'{len(readings)} reading' + ('s' if len(readings) != 1 else '')
+    parts = [f'<article id="{anchor}"><h3><a href="#{anchor}">{question}</a></h3>',
+             f'<details><summary>{count}</summary><ol>']
+    for source_title, source_url, contribution, passage in readings:
+        url = html.escape(source_url, quote=True)
+        title = f'<a href="{url}">{html.escape(source_title)}</a>'
+        parts.append(f'<li>{title}<p>{html.escape(contribution)}</p>'
+                     f'<blockquote>{html.escape(passage)}</blockquote></li>')
+    parts.append('</ol></details></article>')
+    return ''.join(parts)
+
+
 def _render_markdown(markdown, title=None):
     """Render untrusted stored text without permitting embedded HTML or unsafe links."""
     lines = markdown.splitlines()
@@ -554,7 +573,7 @@ def _item_li(pair: tuple[datetime, object], now: datetime, cards: dict, suffix: 
 
 
 def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None = None, cards: dict | None = None, stories: list[dict] | None = None,
-            filters_by_item: dict, topic_titles: dict) -> str:
+            filters_by_item: dict, topic_titles: dict, study_threads=()) -> str:
     now = datetime.fromtimestamp(manifest["epoch"], tz=timezone.utc)
     cards = cards or {}
     esc = html.escape
@@ -599,6 +618,8 @@ def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None =
         'is selected. Curation can draw on older related sources, and stories may leave this feed as the window moves.</p></details>',
         '<div class="sr-status" id="rating-announcement" role="status" aria-live="polite"></div>',
     ]
+    if study_threads:
+        parts.append('<p><a href="#study-threads">Threads of study</a></p>')
     if latest or stories:
         anchors = {pair[1].id for pair in latest}
         source_options = ''.join(f'<option value="channel:{esc(c["name"], quote=True)}">{esc(c["name"])}</option>'
@@ -630,6 +651,10 @@ def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None =
         parts.append('<ol class="feed-list" role="list">' + ''.join(row[1] for row in rows) + '</ol>')
     else:
         parts.append("<p>No recent items yet.</p>")
+    if study_threads:
+        parts.append('<section id="study-threads"><h2>Threads of study</h2>')
+        parts.extend(_study_thread(thread) for thread in study_threads)
+        parts.append('</section>')
     parts.extend(_story_document(row) for row in stories)
     documents = {item.id: item for _, item, _ in latest}
     parts.extend(_document(item, cards.get(item.id, {})) for item in documents.values())
