@@ -94,6 +94,8 @@ class Context:
     public_analysis: bool = False
     failure: dict | None = None
     failure_exception: Exception | None = None
+    excerpt_only: bool = False
+    study_questions: list[str] = field(default_factory=list)
 
 
 def revision_passage(context, revision, start, length):
@@ -106,6 +108,8 @@ def revision_passage(context, revision, start, length):
     if any(left <= start and end <= right for left, right in ranges):
         return {**metadata, 'already_supplied': True, 'end': end,
                 'instruction': 'Use the exact passage already supplied in source_text or an earlier read_revision result.'}
+    if context.excerpt_only and revision.id == context.revision.id:
+        return {**metadata, 'available_ranges': ranges, 'instruction': 'Use the selected article passages and state any evidence gaps.'}
     text = revision.markdown[start:end]
     ranges.append((start, end))
     return {**metadata, 'text': text}
@@ -356,19 +360,15 @@ async def run_agent(context, item, reasoner, decision):
         return output
 
     rev = context.revision
-    included = min(len(rev.markdown), settings.source_character_limit)
-    from paperflow_assistant.evidence import select_evidence
-    selected = (await select_evidence(context, decision, rev.markdown[:included])
-                if settings.evidence_selection_enabled else None)
-    ranges = selected or [(0, included)]
-    context.supplied_passages[str(rev.id)] = ranges
-    first_end = ranges[0][1]
+    from paperflow_assistant.evidence import source_ranges
+    ranges, method = await source_ranges(context, item, decision)
+    included = ranges[0][1]
+    context.excerpt_only = method in {'bounded_excerpt', 'decision_excerpt', 'fallback_excerpt'}
+    context.supplied_passages[str(rev.id)] = list(ranges)
     prompt = {'task': TASK,
               'item': item, 'revision_id': str(rev.id), 'evidence_basis': rev.evidence_basis,
-              'source_text': rev.markdown[:first_end],
-              'source_included_range': [0, first_end],
-              'selected_source_passages': [{'start': start, 'end': end, 'text': rev.markdown[start:end]}
-                                           for start, end in ranges[1:]],
+              'source_text': rev.markdown[:included],
+              'source_included_range': [0, included],
               'source_truncated': sum(end - start for start, end in ranges) < len(rev.markdown),
               'budget': budget_snapshot(settings),
               'source_total_characters': len(rev.markdown), 'categories': settings.categories,
@@ -376,10 +376,14 @@ async def run_agent(context, item, reasoner, decision):
               'open_follow_ups': [] if context.public_analysis else context.store.search_memory(item['title'], 'follow_up', 5),
               'run_id': context.job['id'], 'decision_depth_limit': settings.decision_depth,
               'story_context': context.story_context}
-    if selected:
-        prompt['task'] += (' The source passages are selected excerpts, not complete coverage. '
-            'Each selected_source_passages entry gives its exact original offsets. Read other passages if needed, '
-            'and state the limits of incomplete coverage.')
+    if method != 'source_window':
+        prompt['selected_source_passages'] = [dict(start=a,end=b,text=rev.markdown[a:b]) for a,b in ranges[1:]]
+    if method == 'selected_evidence':
+        prompt['task'] += (' Cite selected passages using their original offsets. Read additional passages as needed, '
+                           'and state the limits of incomplete coverage.')
+    elif context.excerpt_only:
+        prompt['task'] += (' Analyze only the selected excerpts. Use their original revision offsets when citing them. '
+                           'State what these passages cannot establish.')
     if context.story_context:
         prompt['task'] += (' Update the story account using the prior account and all supplied source evidence, '
             'including each pending material contribution. Cite each pending revision in the findings. Preserve still-supported findings and cite exact '
@@ -403,8 +407,9 @@ async def run_agent(context, item, reasoner, decision):
                 model_settings={'timeout': 30, 'max_retries': 0}, retries=1)
             try:
                 async with judge:
-                    audit = await judge.run(json.dumps({'source': rev.markdown[:settings.source_character_limit],
-                        'source_truncated': len(rev.markdown) > settings.source_character_limit,
+                    audit = await judge.run(json.dumps({'source': prompt['source_text'],
+                        'additional_passages': prompt.get('selected_source_passages', []),
+                        'source_truncated': prompt['source_truncated'],
                         'evidence_basis': rev.evidence_basis, 'categories': settings.categories,
                         'analysis': analysis.model_dump(mode='json')}),
                         usage=audit_usage, usage_limits=UsageLimits(request_limit=2,
@@ -419,6 +424,8 @@ async def run_agent(context, item, reasoner, decision):
                 context.usage.incr(audit_usage)
         usage = context.usage
         receipt = {key: getattr(usage, key, 0) for key in ('input_tokens', 'output_tokens', 'requests', 'tool_calls')}
+        if context.excerpt_only:
+            receipt['article_excerpt'] = {'method': method, 'ranges': ranges, 'supplied_characters': sum(b-a for a,b in ranges)}
         receipt.update(reasoning_model=response_model(result, settings.reasoning_model), prompt_version=PROMPT_VERSION,
                        phase_usage={'curation': curation_usage, 'evaluation': usage_snapshot(audit_usage)},
                        budgets={'curation': budget_snapshot(settings), 'evaluation': budget_snapshot(settings, 'evaluation')})
@@ -483,16 +490,17 @@ class AssistantWorker:
     def _assess_revision(self, context, item, start):
         job = context.job
         from paperflow_assistant.stories import (RULE_VERSION, AssessmentDecision, AssessmentFinding, choose_category,
-                                                RepeatReview, assess, review_repeat,
+                                                RepeatReview, assess, evidence_passages, review_repeat,
                                                 validate_decision, account_markdown)
         from paperflow_story_models import Story, StoryAssessment, StoryFinding
         from paperflow_story_vectors import semantic_candidates
         with self.storage.transaction() as repo:
-            documents = [(story_id, text) for story_id, text in repo.story_documents()
+            documents = [(story_id, text, material_at) for story_id, text, material_at in repo.story_documents()
                          if all(repo.is_public_revision(a.revision_id) for a in repo.story_assessments(story_id=UUID(story_id)))]
         semantic = semantic_candidates(item['title'] + '\n' + context.revision.markdown[:4000],
-            documents, index_path=self.settings.path.with_suffix('.stories.mv2'))
+            documents, index_path=self.settings.path.with_suffix('.stories.mv2'), weeks=self.settings.story_search_weeks)
         with self.storage.transaction() as repo:
+            context.study_questions = repo.study_questions(item['title'] + ' ' + context.revision.markdown[:4000])
             candidates = []
             for candidate in repo.story_candidates(context.revision.id, semantic_ids=semantic):
                 if any(not repo.is_public_revision(a.revision_id) for a in repo.story_assessments(story_id=candidate.story.id)):
@@ -527,6 +535,7 @@ class AssistantWorker:
             if (decision.outcome != 'unresolved' and len(context.revision.markdown.split()) < 10
                     and not (decision.outcome == 'repeated_coverage' and same_origin)):
                 decision = AssessmentDecision.model_validate({'outcome': 'unresolved', 'story_id': decision.story_id,
+                    'study_reading': decision.study_reading,
                     'findings': [{'rule_id': 'insufficient-text', 'result': 'unresolved',
                         'rationale': 'The source text is too short to establish its contribution.',
                         'missing_evidence': 'A fuller source revision is needed.'}]})
@@ -591,9 +600,14 @@ class AssistantWorker:
                 creator=self.settings.reasoning_model, creator_kind='processor',
                 processor_version=fingerprint(self.settings), rule_set_version=RULE_VERSION,
                 processing_run_id=uuid5(NAMESPACE_URL, job['id']))
+            study_reading = None
+            if reading := decision.study_reading:
+                passage = evidence_passages(context.revision.markdown)[reading.passage_id]
+                study_reading = (reading.question, reading.contribution, passage)
             with self.storage.transaction(write=True) as repo:
                 assessment = repo.apply_story_assessment(assessment,
-                    story=Story(title=item['title']) if decision.outcome == 'new_story' else None)
+                    story=Story(title=item['title']) if decision.outcome == 'new_story' else None,
+                    study_reading=study_reading)
         # Existing successful source analyses can seed a new story without another model run.
         already_published = False
         if assessment.outcome == 'new_story':
@@ -701,12 +715,13 @@ class AssistantWorker:
             usage = usage_snapshot(context.usage) if context else {}
             detail = (context.failure if context and context.failure_exception is exc else None) or failure_details(
                 exc, self.settings, context.usage if context else RunUsage())
-            detail['retry_scheduled'] = job['attempts'] < self.settings.max_attempts
-            detail['retry_delay_seconds'] = self.settings.retry_seconds*job['attempts'] if detail['retry_scheduled'] else None
+            budget_attempt = job['attempts'] - job['retry_offset']
+            detail['retry_scheduled'] = budget_attempt < self.settings.max_attempts
+            detail['retry_delay_seconds'] = self.settings.retry_seconds*budget_attempt if detail['retry_scheduled'] else None
             usage['failure'] = detail
             logger.warning(json.dumps({'event': 'curation.attempt.failed', 'run_id': job['id'],
                 'attempt': job['attempts'], 'duration_seconds': time.monotonic()-start,
-                'will_retry': job['attempts'] < self.settings.max_attempts,
+                'will_retry': detail['retry_scheduled'],
                 'retry_delay_seconds': detail['retry_delay_seconds'], 'failure': detail}))
             self.store.fail(job, type(exc).__name__, self.settings, time.monotonic()-start, usage)
             return {'id': job['id'], 'status': 'failed', 'error': type(exc).__name__, 'attempt': job['attempts'], 'failure': detail}

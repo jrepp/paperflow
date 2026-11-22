@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from paperflow_domain import ContentRevision, Item
 from paperflow_story_models import Story, StoryAssessment, StoryCandidate, StorySource
@@ -77,8 +77,8 @@ class StoryRepositoryMixin:
         return stories, sources, documents, items, identifiers
 
     def story_documents(self):
-        _, _, documents, _, _ = self._story_index()
-        return [(key, '\n'.join(parts)) for key, parts in documents.items()]
+        stories, _, documents, _, _ = self._story_index()
+        return [(key, '\n'.join(parts), stories[key].material_at) for key, parts in documents.items()]
 
     def story_candidates(self, revision_id, limit=5, semantic_ids=()):
         if not 1 <= limit <= 100:
@@ -122,7 +122,56 @@ class StoryRepositoryMixin:
         candidates.sort(key=lambda x: (-x.score, -x.story.material_at.timestamp(), str(x.story.id)))
         return candidates[:limit]
 
-    def apply_story_assessment(self, assessment, story=None):
+    def _public_study_source(self, revision_id):
+        return self.is_public_revision(revision_id) and self._conn.execute(
+            'SELECT 1 FROM research_revisions r JOIN research_source_observations o ON o.item_id=r.item_id '
+            'WHERE r.id=? LIMIT 1', (str(revision_id),)).fetchone() is not None
+
+    def study_questions(self, source_text, limit=8):
+        words = _tokens(source_text)
+        rows = self._conn.execute('SELECT question, seed_revision_id FROM research_study_threads ORDER BY rowid DESC')
+        ranked = sorted(rows, key=lambda row: len(words & _tokens(row[0])), reverse=True)
+        questions = []
+        for question, revision_id in ranked:
+            if self._public_study_source(revision_id):
+                questions.append(question)
+                if len(questions) == limit:
+                    break
+        return questions
+
+    def published_study_threads(self, selected_ids):
+        if not selected_ids or not self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='research_study_threads'").fetchone():
+            return []
+        # Include the reading history when at least one public reading is in this edition.
+        rows = self._conn.execute("""
+            SELECT t.id, t.question, t.seed_revision_id, m.revision_id, i.payload, m.contribution, m.passage,
+                   (SELECT json_extract(o.payload, '$.entry.url') FROM research_source_observations o
+                    WHERE o.item_id=i.id ORDER BY o.rowid DESC LIMIT 1)
+            FROM research_study_threads t JOIN research_study_readings m ON m.thread_id=t.id
+            JOIN research_revisions r ON r.id=m.revision_id JOIN research_items i ON i.id=r.item_id
+            WHERE t.id IN (
+                SELECT member.thread_id FROM research_study_readings member
+                JOIN research_revisions revision ON revision.id=member.revision_id
+                WHERE revision.item_id IN (SELECT value FROM json_each(?)))
+            ORDER BY m.rowid
+        """, (json.dumps([str(value) for value in selected_ids]),))
+        threads = {}
+        active = set()
+        for thread_id, question, seed, revision_id, payload, contribution, passage, source_url in rows:
+            if thread_id not in threads:
+                threads[thread_id] = ({'id': thread_id, 'question': question, 'readings': []}
+                                      if self._public_study_source(seed) else None)
+            thread = threads[thread_id]
+            if thread is None or not self._public_study_source(revision_id):
+                continue
+            item = Item.model_validate_json(payload)
+            thread['readings'].append((item.title, str(item.canonical_url or source_url), contribution, passage))
+            if item.id in selected_ids:
+                active.add(thread_id)
+        return [thread for key, thread in threads.items() if key in active]
+
+    def apply_story_assessment(self, assessment, story=None, *, study_reading=None):
         assessment = StoryAssessment.model_validate(assessment.model_dump())
         revision = self.get(ContentRevision, assessment.revision_id)
         if revision is None: raise ReferenceError('missing ContentRevision')
@@ -146,6 +195,19 @@ class StoryRepositoryMixin:
             if assessment.story_version != current.version: raise ConflictError('story changed; reassess against current version')
         self._conn.execute('INSERT INTO research_story_assessments VALUES (?,?,?,?)',
             (str(assessment.id), str(assessment.revision_id), str(assessment.story_id) if assessment.story_id else None, assessment.model_dump_json()))
+        if study_reading is not None:
+            question, contribution, passage = study_reading
+            question = ' '.join(question.split())
+            if not question or not contribution.strip() or not passage or passage not in revision.markdown:
+                raise ValueError('Study reading requires a question, a contribution and an exact source passage')
+            if not self._public_study_source(revision.id):
+                raise ValueError('Study reading requires an observed public source revision')
+            thread_id = str(uuid5(NAMESPACE_URL, 'paperflow:study:' + question.casefold()))
+            self._conn.execute('INSERT INTO research_study_threads VALUES (?,?,?) ON CONFLICT(id) DO NOTHING',
+                               (thread_id, question, str(revision.id)))
+            self._conn.execute('INSERT INTO research_study_readings VALUES (?,?,?,?,?) '
+                               'ON CONFLICT(thread_id,revision_id) DO NOTHING',
+                               (thread_id, str(revision.id), str(assessment.id), contribution.strip(), passage))
         if assessment.outcome != 'unresolved':
             old = next((s for s in self.story_sources(assessment.story_id) if s.item_id == revision.item_id), None)
             source = StorySource(story_id=assessment.story_id, item_id=revision.item_id, revision_id=revision.id,

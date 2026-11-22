@@ -203,7 +203,7 @@ def reddit_probe_command(
         # Do not print validation payloads: configuration can contain credentials.
         message = str(exc) if isinstance(exc, RedditAccessError) else "Invalid probe configuration or response; check inputs and fixture shape."
         typer.echo(message, err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     typer.echo(result.model_dump_json(indent=2))
 
 
@@ -230,7 +230,7 @@ def collect_channel_command(
             persist_batch(storage, batch)
     except (OSError, ValueError, StorageError) as exc:
         typer.echo(f"Channel collection failed ({type(exc).__name__}); check configuration, endpoint, and storage.", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     typer.echo(batch.model_dump_json(indent=2))
 
 library_app.command("prepare")(radar_cli.prepare_command)

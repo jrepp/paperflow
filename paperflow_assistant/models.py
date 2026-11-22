@@ -29,6 +29,7 @@ class AssistantSettings(StrictModel):
     decision_model: str = "jev-1.14.0"
     decision_base_url: str = "https://api.typesafe.ai"
     decision_key: SecretStr | None = Field(default=None, exclude=True)
+    story_search_weeks: int = Field(default=4, ge=1, le=520)
     interval_seconds: int = Field(default=60, ge=1)
     items_per_cycle: int = Field(default=1, ge=1, le=20)
     reasoning_prices: TokenPrices = Field(default_factory=lambda: TokenPrices(

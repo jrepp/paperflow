@@ -143,3 +143,40 @@ def test_empty_or_missing_credentials_fail_closed(tmp_path):
     settings.publishing.build_token_file.write_text('')
     with pytest.raises(ValueError, match='at least 32'):
         create_app(settings)
+
+
+def test_public_snapshot_survives_recovery_and_excludes_diagnostics(tmp_path, monkeypatch):
+    from paperflow_monitor import IntegrationMonitor
+
+    settings, headers = config(tmp_path, build_reuse_seconds=0)
+    settings.monitor.enabled = True
+    from paperflow_telemetry import Telemetry
+    monitor = IntegrationMonitor(settings, telemetry=Telemetry(settings.telemetry))
+    # Exercise real publication with deterministic operator-only monitor evidence.
+    monkeypatch.setattr(monitor, 'start', lambda: None)
+    monkeypatch.setattr(monitor.store, 'channels', lambda: [])
+    health = {'healthy': False, 'scheduler_running': True, 'scheduler_error': None,
+              'overdue_runs': [], 'schedule_enabled': True, 'topics': {'error': None},
+              'curation': {'enabled': True, 'healthy': False, 'error': 'CapacityExceededError',
+                           'failure': {'limit': 'index_bytes', 'observed': 54216799}}}
+    monkeypatch.setattr(monitor, 'health', lambda: health)
+    with TestClient(create_app(settings, monitor=monitor)) as client:
+        def publish():
+            job = completed(client, headers, client.post('/api/publish/builds', headers=headers).json()['id'])
+            assert job['status'] == 'succeeded'
+            return settings.publishing.releases_dir / job['release_id']
+
+        first = publish()
+        health.update(healthy=True)
+        health['curation']['healthy'] = True
+        second = publish()
+        assert client.get('/api/monitor/publication').json()['service_status'] == 'current'
+        for release, state, message in [(first, 'curation_delayed', 'Curation is delayed'),
+                                         (second, 'current', 'Updates were running normally')]:
+            manifest = (release / 'build.json').read_text()
+            page = (release / 'index.html').read_text()
+            assert json.loads(manifest)['service_status'] == state and message in page
+            assert all(value not in manifest + page for value in ('CapacityExceededError', 'index_bytes', '54216799'))
+        monkeypatch.setattr(monitor, 'health', lambda: 1 / 0)
+        unknown = publish()
+        assert json.loads((unknown / 'build.json').read_text())['service_status'] == 'unknown'

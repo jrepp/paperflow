@@ -1,5 +1,52 @@
 /* Published cards work as native disclosures; feedback adds an optional network action. */
 (() => {
+  const filters = document.getElementById('published-filters');
+  if (filters) {
+    const channel = filters.querySelector('#published-channel');
+    const kind = filters.querySelector('#published-kind');
+    const rows = Array.from(document.querySelectorAll('[data-feed-filters]'), article => ({
+      row: article.closest('li'), sources: JSON.parse(article.dataset.feedFilters)
+    }));
+    function apply() {
+      const params = new URLSearchParams(location.search);
+      const topic = params.get('topic');
+      const source = params.get('channel');
+      channel.value = topic ? 'topic:' + topic : source ? 'channel:' + source : '';
+      kind.value = params.get('kind') || '';
+      if (channel.selectedIndex < 0) channel.selectedIndex = 0;
+      if (kind.selectedIndex < 0) kind.selectedIndex = 0;
+      let count = 0;
+      for (const {row, sources} of rows) {
+        const visible = sources.some(([feed, type, topics]) =>
+          (!kind.value || type === kind.value) && (!channel.value ||
+            channel.value === 'channel:' + feed || topics.some(id => channel.value === 'topic:' + id)));
+        row.hidden = !visible;
+        if (visible) count++;
+      }
+      filters.querySelector('#filtered-count').textContent = count === 1 ? '1 story' : count + ' stories';
+    }
+    filters.addEventListener('change', () => {
+      const url = new URL(location.href);
+      for (const key of ['topic', 'channel', 'kind']) url.searchParams.delete(key);
+      if (channel.value) {
+        const separator = channel.value.indexOf(':');
+        url.searchParams.set(channel.value.slice(0, separator), channel.value.slice(separator + 1));
+      }
+      if (kind.value) url.searchParams.set('kind', kind.value);
+      url.hash = '';
+      try { history.pushState(null, '', url); } catch { location.assign(url.href); return; }
+      apply();
+    });
+    window.addEventListener('popstate', apply);
+    apply();
+    filters.hidden = false;
+  }
+  const snapshot = document.querySelector('#publication-status time');
+  if (snapshot && Date.now() - Date.parse(snapshot.dateTime) > 24 * 60 * 60 * 1000) {
+    const status = snapshot.parentElement;
+    status.className = 'monitor-callout';
+    status.append(' · This edition is over a day old. Current service status is unknown.');
+  }
   const announce = document.getElementById('rating-announcement');
   function closeCard(container) {
     if (container.matches('details')) {

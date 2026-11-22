@@ -52,6 +52,14 @@ class AssistantStore:
                 if sql.strip():
                     conn.execute(sql)
 
+            # Grant a fresh retry budget only to story jobs affected by the old single-file index.
+            # Lifetime attempt numbers remain unique for audit and request metering.
+            if 'retry_offset' not in {row[1] for row in conn.execute("PRAGMA table_info(assistant_jobs)")}:
+                conn.execute("ALTER TABLE assistant_jobs ADD COLUMN retry_offset INTEGER NOT NULL DEFAULT 0")
+                conn.execute("""UPDATE assistant_jobs SET retry_offset=attempts,status='queued',available_at=?
+                    WHERE status IN ('failed','queued') AND error='CapacityExceededError'
+                      AND id IN (SELECT job_id FROM assistant_story_jobs)""", (time.time(),))
+
     def recover(self):
         # The monitor's process lock establishes exclusive ownership before this call.
         with self.connection(True) as conn:
@@ -121,7 +129,7 @@ class AssistantStore:
             used, _, _ = self._token_window(conn, time.time())
             if used >= rolling_token_limit:
                 return None
-            conn.execute("UPDATE assistant_jobs SET status='failed',error='AttemptsExhausted' WHERE status='queued' AND attempts>=?", (max_attempts,))
+            conn.execute("UPDATE assistant_jobs SET status='failed',error='AttemptsExhausted' WHERE status='queued' AND attempts-retry_offset>=?", (max_attempts,))
             priority = {str(rev): rank for rank, rev in enumerate(priority_revisions)}
             conn.create_function('current_assessment', 2, assessment_key, deterministic=True)
             conn.create_function('publication_rank', 1, lambda rev: priority.get(rev, len(priority)))
@@ -236,8 +244,8 @@ class AssistantStore:
     def fail(self, job, error, settings, duration, usage=None):
         with self.connection(True) as conn:
             conn.execute("""UPDATE assistant_jobs SET status=?,error=?,finished_at=?,duration=?,available_at=?,usage=? WHERE id=?""",
-                         ('queued' if job['attempts'] < settings.max_attempts else 'failed',
-                          error, time.time(), duration, time.time()+settings.retry_seconds * job['attempts'], encode(usage or {}), job['id']))
+                         ('queued' if job['attempts'] - job['retry_offset'] < settings.max_attempts else 'failed',
+                          error, time.time(), duration, time.time()+settings.retry_seconds * (job['attempts'] - job['retry_offset']), encode(usage or {}), job['id']))
             conn.execute("UPDATE assistant_attempts SET status='failed',finished_at=?,usage=?,error=? WHERE job_id=? AND status='running'",
                          (time.time(), encode(usage or {}), error, job['id']))
 
@@ -438,7 +446,7 @@ class AssistantStore:
             rows = conn.execute("SELECT job_id,attempt,status,finished_at,error,usage FROM assistant_attempts WHERE finished_at>=? ORDER BY finished_at DESC", (now-86400,)).fetchall()
             last_success = conn.execute("SELECT MAX(finished_at) FROM assistant_attempts WHERE status='succeeded'").fetchone()[0]
             used, missing_usage, expiry = self._token_window(conn, now)
-            next_job = conn.execute("SELECT MIN(available_at) FROM assistant_jobs WHERE status='queued' AND attempts<?", (settings.max_attempts,)).fetchone()[0]
+            next_job = conn.execute("SELECT MIN(available_at) FROM assistant_jobs WHERE status='queued' AND attempts-retry_offset<?", (settings.max_attempts,)).fetchone()[0]
         groups, recent, consecutive = {}, [], 0
         for row in rows:
             if row['status'] != 'failed':
@@ -464,6 +472,80 @@ class AssistantStore:
                 'rolling_unknown_usage_requests': missing_usage, 'rolling_next_expiry_at': expiry,
                 'next_eligible_at': next_job, 'queue_blocked_reason': blocked,
                 'legacy_note': 'Historical exception types without diagnostics have unknown exact limits.'}
+
+    def pipeline_stages(self, fingerprint, *, overdue, budget_blocked, now=None):
+        """Explain current-harness queues and recent attempt outcomes for the operator."""
+        now = time.time() if now is None else now
+        stages = []
+        with self.connection() as conn:
+            conn.create_function('current_assessment', 2, assessment_key, deterministic=True)
+            for stage in ('assessment', 'analysis'):
+                # Reconciliation retains older rule versions for audit. Only the current
+                # assessment key is claimable; analysis also includes story update jobs.
+                scope = ("j.id=current_assessment(j.fingerprint,j.revision_id)" if stage == 'assessment'
+                         else "NOT EXISTS (SELECT 1 FROM assistant_story_jobs s WHERE s.job_id=j.id)")
+                queue = conn.execute(f"""SELECT COUNT(*) FILTER (WHERE status='queued') AS queued,
+                    MIN(queued_at) FILTER (WHERE status='queued') AS oldest,
+                    MIN(started_at) FILTER (WHERE status='running') AS running_since
+                    FROM assistant_jobs j WHERE fingerprint=? AND {scope}""", (fingerprint,)).fetchone()
+                active = conn.execute(f"""SELECT d.item_id,d.title FROM assistant_jobs j
+                    JOIN assistant_documents d ON d.revision_id=j.revision_id
+                    WHERE fingerprint=? AND {scope} AND j.status='running'
+                    ORDER BY j.started_at LIMIT 1""", (fingerprint,)).fetchone()
+                rows = conn.execute(f"""SELECT a.status,a.finished_at,a.error,
+                    json_extract(a.usage,'$.failure.phase') AS phase,
+                    json_extract(a.usage,'$.failure.limit') AS failure_limit,
+                    json_extract(a.usage,'$.failure.observed') AS observed,
+                    json_extract(a.usage,'$.failure.configured_limit') AS configured_limit
+                    FROM assistant_attempts a
+                    JOIN assistant_jobs j ON j.id=a.job_id WHERE j.fingerprint=? AND {scope}
+                    AND a.status IN ('succeeded','failed','interrupted')
+                    ORDER BY a.finished_at DESC,a.attempt DESC""", (fingerprint,))
+                counts = dict(succeeded=0, failed=0, interrupted=0)
+                latest = last_success = last_failure = None
+                streak = 0
+                counting_failures = True
+                for row in rows:
+                    recent = row['finished_at'] >= now - 86400
+                    if recent:
+                        counts[row['status']] += 1
+                    latest = latest or row['status']
+                    counting_failures = counting_failures and recent and row['status'] == 'failed'
+                    if row['status'] == 'succeeded':
+                        last_success = last_success or row['finished_at']
+                    elif row['status'] == 'failed':
+                        if last_failure is None:
+                            last_failure = dict(at=row['finished_at'], error=row['error'], phase=row['phase'],
+                                                limit=row['failure_limit'], observed=row['observed'], configured_limit=row['configured_limit'])
+                        if counting_failures:
+                            streak += 1
+                    if not recent and last_success and last_failure:
+                        break
+                running = queue['running_since']
+                if overdue and running is not None:
+                    condition = 'overdue'
+                elif latest == 'failed' and streak:
+                    condition = 'failing'
+                elif budget_blocked and queue['queued']:
+                    condition = 'budget_blocked'
+                elif queue['oldest'] and queue['oldest'] <= now-86400 and not counts['succeeded']:
+                    condition = 'no_completions'
+                elif latest == 'interrupted' and counts['interrupted']:
+                    condition = 'interrupted'
+                elif running is not None:
+                    condition = 'running'
+                elif counts['succeeded']:
+                    condition = 'completing'
+                elif queue['queued']:
+                    condition = 'waiting'
+                else:
+                    condition = 'idle'
+                stages.append(dict(stage=stage, condition=condition, queued=queue['queued'],
+                    oldest_queued_at=queue['oldest'], running_since=running, active_item=dict(active) if active else None, attempts_24h=counts,
+                    consecutive_failures_24h=streak, last_success_at=last_success, last_failure=last_failure))
+        urgency = ('overdue', 'failing', 'budget_blocked', 'no_completions', 'interrupted',
+                   'running', 'completing', 'waiting', 'idle')
+        return sorted(stages, key=lambda stage: urgency.index(stage['condition']))
 
     def metrics(self):
         with self.connection() as conn:

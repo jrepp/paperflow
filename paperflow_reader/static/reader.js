@@ -216,8 +216,77 @@ async function research(generation) {
   if(!data.records.length) container.innerHTML='<div class="panel"><h2>Start with curiosity.</h2><p>Save interesting reading first. Research collections are separate from your everyday reading shelf.</p></div>';
   for(const bucket of data.records) {const el=document.createElement('article');el.className='panel';el.innerHTML=`<h2>${esc(bucket.title)}</h2><p>${esc(bucket.research_question)}</p><a class="control" href="/research/${bucket.id}">Read research brief</a>`;container.append(el);}
 }
+function renderPipeline(curation) {
+  if (!curation?.enabled) return curation ? '<p>Curation is disabled.</p>' : '<p>Pipeline status is unavailable.</p>';
+  const stages=curation.stages;
+  if (!stages?.length) return '<p>Stage measurements are unavailable.</p>';
+  const names={assessment:'Story assessment',analysis:'Curation analysis'};
+  const conditions={overdue:'Overdue run',failing:'Latest attempt failed',budget_blocked:'Waiting for token budget',
+    no_completions:'No completions in 24 hours',interrupted:'Latest attempt interrupted',running:'Running',
+    completing:'Completing work',waiting:'Queued',idle:'Idle'};
+  const issues=new Set(['overdue','failing','budget_blocked','no_completions','interrupted']);
+  const timestamp=value=>value?new Date(value*1000).toLocaleString():'None recorded';
+  const elapsed=value=>{
+    const minutes=Math.max(0,Math.floor((Date.now()/1000-value)/60));
+    if (minutes<1) return 'under a minute';
+    if (minutes<60) return `${minutes} min`;
+    return `${Math.floor(minutes/60)}h ${minutes%60}m`;
+  };
+  return stages.map(stage=>{
+    const counts=stage.attempts_24h, issue=issues.has(stage.condition);
+    const failure=stage.last_failure;
+    const limit=failure?.limit?` · ${esc(failure.phase)} · ${esc(failure.limit)} (${esc(failure.observed??'unknown')} / ${esc(failure.configured_limit??'unknown')})`:'';
+    const active=stage.active_item;
+    const message=stage.condition==='overdue'?'The worker exceeded its expected cycle time.':
+      stage.condition==='budget_blocked'?'Processing can resume when the rolling token budget has capacity.':
+      stage.condition==='no_completions'?'Work has been queued for at least a day without a successful attempt in the last 24 hours.':'';
+    return `<article class="panel"><h3>${esc(names[stage.stage]||stage.stage)}</h3>
+      <p class="${issue?'monitor-callout':'muted'}"><strong>${esc(conditions[stage.condition]||'Unknown')}</strong>${message?' · '+message:''}</p>
+      <p>Last 24 hours · ${esc(counts.succeeded)} succeeded · ${esc(counts.failed)} failed · ${esc(counts.interrupted)} interrupted</p>
+      <p>${esc(stage.queued)} queued${stage.oldest_queued_at?' · oldest waiting '+elapsed(stage.oldest_queued_at):''}${stage.running_since?' · active for '+elapsed(stage.running_since):''}</p>
+      ${active?`<p>Active item · <a href="/read/${encodeURIComponent(active.item_id)}">${esc(active.title)}</a></p>`: ''}
+      <p>Last success · ${esc(timestamp(stage.last_success_at))}</p>
+      ${failure?`<p>Last failure · ${esc(timestamp(failure.at))} · ${esc(failure.error||'Cause unavailable')}${limit}${stage.consecutive_failures_24h?' · '+esc(stage.consecutive_failures_24h)+' consecutive failures in 24h':''}</p>`:''}</article>`;
+  }).join('');
+}
+
+const operationsPanes = [
+  ['pipeline-health','Pipeline health','M3 5h5v5H3z M16 14h5v5h-5z M8 7.5h4v9h4'],
+  ['curation-overview','Diagnostics','M2 12h5l3-8 4 16 3-8h5'],
+  ['quality','Quality','M12 2l8 4v6q0 6-8 10-8-4-8-10V6z M8 12l3 3 5-6'],
+  ['usage','Usage and spend','M3 3v18h18 M7 17v-4 M12 17V9 M17 17V5'],
+  ['monitor-overview','Service health','M3 4h18v6H3z M3 14h18v6H3z M6 7h1 M6 17h1'],
+  ['source-list','Source feeds','M4 4a16 16 0 0116 16 M4 10a10 10 0 0110 10 M5 17a2 2 0 100 4 2 2 0 000-4z'],
+  ['recent-runs','Run history','M3 10a9 9 0 119 11 M3 4v6h6 M12 7v5l4 2']
+];
+
+function showOperationsPane() {
+  const nav = document.getElementById('operations-nav');
+  if (!nav) return;
+  const selected = operationsPanes.find(([id]) => '#' + id === location.hash)?.[0] || 'pipeline-health';
+  for (const link of nav.querySelectorAll('a')) {
+    const current = link.hash === '#' + selected;
+    document.getElementById(link.hash.slice(1)).hidden = !current;
+    if (current) link.setAttribute('aria-current','page');
+    else link.removeAttribute('aria-current');
+  }
+}
+window.addEventListener('hashchange',showOperationsPane);
+
 async function sources(generation) {
-  main.innerHTML=`<div class="sources-heading"><div><p class="kicker">Ingestion monitor</p><h1>Sources</h1><p class="muted">From incoming feeds to your reading space.</p></div><div class="sources-refresh"><button id="refresh-sources">Refresh source status</button><span id="sources-updated" class="meta">Checking…</span></div></div><div id="sources-alert" aria-live="polite"></div><section id="monitor-overview" aria-label="Ingestion overview"></section><section id="curation-overview" class="panel" aria-label="Research curation"></section><div class="sources-section-heading"><h2>Source feeds</h2><span class="meta">Freshness reflects collection, not publication date.</span></div><div id="source-list" class="source-monitor-grid"></div><details id="recent-runs" class="run-history"><summary>Recent ingestion runs</summary><div id="run-history"></div></details>`;
+  const links = operationsPanes.map(([id,label,path])=>`<a href="#${id}" title="${label}" aria-label="${label}"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="${path}"/></svg><span>${label}</span></a>`).join('');
+  main.innerHTML=`<div class="sources-heading"><h1>Operations</h1>
+    <div class="sources-refresh"><button id="refresh-sources">Refresh status</button><span id="sources-updated" class="meta">Checking…</span></div></div>
+    <div class="operations-surface"><nav id="operations-nav" aria-label="Operations sections">${links}</nav>
+    <div class="operations-content"><div id="sources-alert" aria-live="polite"></div>
+    <section id="pipeline-health" aria-labelledby="pipeline-title"><h2 id="pipeline-title">Curation pipeline</h2><div id="pipeline-stages" class="source-monitor-grid"></div></section>
+    <section id="curation-overview" class="panel" aria-label="Research curation"></section>
+    <section id="quality" class="panel" aria-label="Quality"></section>
+    <section id="usage" class="panel" aria-label="Usage and spend"></section>
+    <section id="monitor-overview" aria-label="Service health"></section>
+    <section id="source-list" aria-label="Source feeds"><div class="sources-section-heading"><h2>Source feeds</h2><span class="meta">Freshness reflects collection time.</span></div><div id="source-cards" class="source-monitor-grid"></div></section>
+    <section id="recent-runs" aria-label="Run history"><h2>Recent ingestion runs</h2><div id="run-history"></div></section></div></div>`;
+  showOperationsPane();
   let loading=false,operating=false;
   const sourceName=name=>({'hackernews':'Hacker News','huggingface-papers':'Hugging Face Papers','lemmy-technology':'Lemmy · Technology','tildes-computing':'Tildes · Computing','mbin':'Mbin'}[name] || name);
   const stamp=value=>value?new Date(value).toLocaleString(): 'Not yet';
@@ -228,50 +297,76 @@ async function sources(generation) {
     if(loading || (operating&&!manual) || generation!==pageGeneration)return;
     loading=true;
     try{
-      const [observedResult,channelsResult,runsResult,healthResult,curationResult]=await Promise.allSettled([
+      const [observedResult,channelsResult,runsResult,healthResult,curationResult,versionResult,publicationResult]=await Promise.allSettled([
         api('/api/reader/channels'),api('/api/monitor/channels'),api('/api/monitor/runs?limit=10'),
-        fetch('/health/ready').then(async r=>{const value=await r.json();if(!r.ok&&!('healthy' in value))throw new Error('Monitor health unavailable');return value;}),api('/api/monitor/curation')]);
+        fetch('/health/ready').then(async r=>{const value=await r.json();if(!r.ok&&!('healthy' in value))throw new Error('Monitor health unavailable');return value;}),api('/api/monitor/curation'),api('/api/version'),api('/api/monitor/publication')]);
       if(generation!==pageGeneration)return;
-      if(observedResult.status==='rejected')throw observedResult.reason;
-      const observed=observedResult.value,channels=channelsResult.status==='fulfilled'?channelsResult.value:[],runs=runsResult.status==='fulfilled'?runsResult.value:[],health=healthResult.status==='fulfilled'?healthResult.value:null;
+
+      const observed=observedResult.status==='fulfilled'?observedResult.value:[],channels=channelsResult.status==='fulfilled'?channelsResult.value:[],runs=runsResult.status==='fulfilled'?runsResult.value:[],health=healthResult.status==='fulfilled'?healthResult.value:null;
       const curation=curationResult.status==='fulfilled'?curationResult.value:null;
+      document.querySelector('#pipeline-stages').innerHTML=renderPipeline(curation);
+      const version=versionResult.status==='fulfilled'?versionResult.value:null;
+      const publication=publicationResult.status==='fulfilled'?publicationResult.value:null;
+      const publicationLabel={succeeded:'Generated',running:'Building',failed:'Build failed',disabled:'Publisher disabled',no_build:'No build recorded'}[publication?.status]||'Status unavailable';
+      const editionStatus={current:'Updates current',updates_delayed:'Updates delayed',curation_delayed:'Curation delayed',unknown:'Status unavailable'}[publication?.service_status];
+      const focused=document.activeElement.id;
       const curator=document.querySelector('#curation-overview');
-      if(!curation){curator.innerHTML='<h2>Research curation</h2><p>Status unavailable.</p>';}
-      else if(!curation.enabled){curator.innerHTML='<h2>Research curation</h2><p>Model curation is disabled.</p>';}
+      const qualityPanel=document.querySelector('#quality'), usagePanel=document.querySelector('#usage');
+      const unavailable=curation && !curation.enabled?'Curation is disabled.':'Measurements unavailable.';
+      qualityPanel.innerHTML=`<h2>Quality</h2><p>${unavailable}</p>`;
+      usagePanel.innerHTML=`<h2>Usage and spend</h2><p>${unavailable}</p>`;
+      if(!curation){curator.innerHTML='<h2>Curation diagnostics</h2><p>Status unavailable.</p>';}
+      else if(!curation.enabled){curator.innerHTML='<h2>Curation diagnostics</h2><p>Model curation is disabled.</p>';}
       else{
         const counts=curation.counts||{},quality=curation.quality||{};
         const groups=Object.entries(quality.groups||{}).map(([name,g])=>{
           const bounds=g.pass_rate_interval_95;
           return `<li>${esc(name)}: ${g.passed} / ${g.n} passed (${Math.round(g.pass_rate*100)}%). Estimated interval: ${Math.round(bounds[0]*100)}–${Math.round(bounds[1]*100)}%.</li>`;
         }).join('');
-        curator.innerHTML=`<h2>Research curation</h2><dl class="monitor-metrics"><div><dt>Completed / eligible</dt><dd>${counts.succeeded||0} / ${curation.eligible_jobs||0}</dd></div><div><dt>Queued / running</dt><dd>${counts.queued||0} / ${counts.running||0}</dd></div><div><dt>Failed / retries</dt><dd>${counts.failed||0} / ${curation.retries||0}</dd></div><div><dt>Open follow-ups</dt><dd>${curation.active_memory?.follow_up||0}</dd></div></dl><p>Counts refer to source revisions and harness configurations.</p><p>${curation.valid_quote_citations||0} exact citation matches. Matches establish provenance, not factual correctness.</p><p>Quality sample: ${quality.sample_evaluated||0} evaluated / ${quality.sample_selected||0} selected. Evaluation errors: ${quality.evaluation_errors||0}.</p>${groups?`<ul>${groups}</ul>`:'<p>Quality estimate unavailable: no completed evaluations.</p>'}<p class="muted">Model-estimated quality. Human-calibrated accuracy is unknown.</p>`;
+        curator.innerHTML=`<h2>Curation diagnostics</h2><dl class="monitor-metrics"><div><dt>Completed / eligible</dt><dd>${counts.succeeded||0} / ${curation.eligible_jobs||0}</dd></div><div><dt>Queued / running</dt><dd>${counts.queued||0} / ${counts.running||0}</dd></div><div><dt>Failed / retries</dt><dd>${counts.failed||0} / ${curation.retries||0}</dd></div><div><dt>Open follow-ups</dt><dd>${curation.active_memory?.follow_up||0}</dd></div></dl><p>Counts refer to source revisions and harness configurations.</p>`;
+        qualityPanel.innerHTML=`<h2>Quality</h2><p>${curation.valid_quote_citations||0} exact citation matches. Matches establish provenance, not factual correctness.</p><p>Quality sample: ${quality.sample_evaluated||0} evaluated / ${quality.sample_selected||0} selected. Evaluation errors: ${quality.evaluation_errors||0}.</p>${groups?`<ul>${groups}</ul>`:'<p>Quality estimate unavailable: no completed evaluations.</p>'}<p class="muted">Model-estimated quality. Human-calibrated accuracy is unknown.</p>`;
+        const assessments=curation.story_assessments?.counts||{};
+        const heading=curator.querySelector('h2');
+        heading.insertAdjacentHTML('afterend', `<p>Story assessments · ${esc(assessments.queued??'—')} queued · ${esc(assessments.failed??'—')} failed</p><button id="request-curation">Request curation cycle</button>`);
+        document.querySelector('#request-curation').onclick=async e=>{
+          const button=e.currentTarget;
+          operating=true;button.disabled=true;
+          try {
+            const receipt=await api('/api/monitor/curation/runs',{method:'POST'});
+            announce(receipt.status==='running'?'Curation is already running.':'Curation cycle requested. Queue and budget limits still apply.');
+          } catch(error){announce(error.message);}
+          finally{operating=false;button.disabled=false;}
+        };
         const diagnostic=curation.diagnostics;
         if(diagnostic){
           const failures=Object.entries(diagnostic.failure_groups||{}).map(([key,count])=>`<li>${esc(key)}: ${count}</li>`).join('');
           const latest=diagnostic.recent_failures?.[0],detail=latest?.failure;
           const lastSuccess=diagnostic.last_success_at?new Date(diagnostic.last_success_at*1000).toISOString():'none recorded';
           const limit=detail?`${esc(detail.phase)} · ${esc(detail.limit||'unknown limit')}: ${detail.observed??'unknown'} / ${detail.configured_limit??'unknown'} (${esc(detail.measurement)})`:'Exact limit unavailable for this historical failure.';
-          curator.insertAdjacentHTML('beforeend',`<h3>Execution diagnostics</h3><p>Last 24 hours: ${diagnostic.failed_attempts} failed / ${diagnostic.completed_attempts} finished attempts. Consecutive failures: ${diagnostic.consecutive_failures_in_window}.</p><p>Rolling 24-hour tokens: ${diagnostic.rolling_tokens_used} / ${diagnostic.rolling_token_limit}; unknown usage: ${diagnostic.rolling_unknown_usage_requests} requests. Queue: ${esc(diagnostic.queue_blocked_reason||'eligible work available')}. Last successful analysis: ${esc(lastSuccess)}.</p>${failures?`<ul>${failures}</ul>`:''}${latest?`<p>Latest failure: ${esc(latest.error_type)}. ${limit}</p>`:''}<p class="muted">Token caps count cumulative input and output across turns, including repeated context. Budget failures degrade curation; service readiness is reported separately.</p>`);
+          curator.insertAdjacentHTML('beforeend',`<h3>Execution diagnostics</h3><p>Last 24 hours: ${diagnostic.failed_attempts} failed / ${diagnostic.completed_attempts} finished attempts. Consecutive failures: ${diagnostic.consecutive_failures_in_window}.</p><p>Rolling 24-hour tokens: ${diagnostic.rolling_tokens_used} / ${diagnostic.rolling_token_limit}; unknown usage: ${diagnostic.rolling_unknown_usage_requests} requests. Queue: ${esc(diagnostic.queue_blocked_reason||'eligible work available')}. Last successful attempt: ${esc(lastSuccess)}.</p>${failures?`<ul>${failures}</ul>`:''}${latest?`<p>Latest failure: ${esc(latest.error_type)}. ${limit}</p>`:''}<p class="muted">Token caps count cumulative input and output across turns, including repeated context. Budget failures degrade curation; service readiness is reported separately.</p>`);
         }
         const spend=curation.spend;
         if(spend){
           const money=value=>value==null?'Unknown':`$${Number(value).toFixed(6)}`;
           const groups=Object.entries(spend.by_role_and_model||{}).map(([name,g])=>`<tr><th scope="row">${esc(name)}</th><td>${g.requests}</td><td>${g.input_tokens}</td><td>${g.output_tokens}</td><td>${g.cache_read_tokens}</td><td>${money(g.estimated_usd)}</td></tr>`).join('');
-          curator.insertAdjacentHTML('beforeend',`<h3>Usage and spend · last ${spend.window_days} days</h3><dl class="monitor-metrics"><div><dt>Estimated spend</dt><dd>${money(spend.estimated_usd)}</dd></div><div><dt>Per completed analysis</dt><dd>${money(spend.estimated_usd_per_completed_job)}</dd></div><div><dt>Input / output tokens</dt><dd>${spend.input_tokens} / ${spend.output_tokens}</dd></div><div><dt>Retry spend</dt><dd>${money(spend.retry_estimated_usd)}</dd></div></dl><p>${spend.priced_requests} priced requests. ${spend.unpriced_requests} requests have unknown cost, including ${spend.pending_requests} pending.</p><p>Current schedule: ${curation.schedule?.items_per_cycle||1} item(s) per cycle, every ${curation.schedule?.interval_seconds||60} seconds. Rolling token limit: ${curation.schedule?.rolling_token_limit??"unknown"}.</p><details><summary>Usage by model role</summary><div class="overflow-x-auto"><table><thead><tr><th>Role and model</th><th>Requests</th><th>Input</th><th>Output</th><th>Cached input</th><th>Estimated USD</th></tr></thead><tbody>${groups}</tbody></table></div></details><p class="muted">Token-price estimates, not billed spend. Unknown usage is not free. Prices and request timing affect the estimate.</p>`);
+          usagePanel.innerHTML=`<h2>Usage and spend · last ${spend.window_days} days</h2><dl class="monitor-metrics"><div><dt>Estimated spend</dt><dd>${money(spend.estimated_usd)}</dd></div><div><dt>Per completed analysis</dt><dd>${money(spend.estimated_usd_per_completed_job)}</dd></div><div><dt>Input / output tokens</dt><dd>${spend.input_tokens} / ${spend.output_tokens}</dd></div><div><dt>Retry spend</dt><dd>${money(spend.retry_estimated_usd)}</dd></div></dl><p>${spend.priced_requests} priced requests. ${spend.unpriced_requests} requests have unknown cost, including ${spend.pending_requests} pending.</p><p>Current schedule: ${curation.schedule?.items_per_cycle||1} item(s) per cycle, every ${curation.schedule?.interval_seconds||60} seconds. Rolling token limit: ${curation.schedule?.rolling_token_limit??"unknown"}.</p><details><summary>Usage by model role</summary><div class="overflow-x-auto"><table><thead><tr><th>Role and model</th><th>Requests</th><th>Input</th><th>Output</th><th>Cached input</th><th>Estimated USD</th></tr></thead><tbody>${groups}</tbody></table></div></details><p class="muted">Token-price estimates, not billed spend. Unknown usage is not free. Prices and request timing affect the estimate.</p>`;
         }
       }
-      const mode=health?.enabled===false?'Monitor disabled':health?.schedule_enabled===false?'Manual collection':health?.healthy?'Automatic collection':'Monitor needs attention';
+      const curationIssue=health?.curation?.enabled && (health.curation.degraded || health.curation.overdue || health.curation.healthy===false);
+      const publicationFailed=publication?.status==='failed';
+      const mode=publicationFailed?'Publication needs attention':curationIssue?'Curation needs attention':health?.enabled===false?'Monitor disabled':health?.schedule_enabled===false?'Manual collection':health?.healthy?'Automatic collection':'Monitor needs attention';
       const running=channels.filter(c=>c.active_run_id).length,paused=channels.filter(c=>c.paused).length;
       const attention=channels.filter(c=>['Stale','Failed','Warnings','Not run yet'].includes(statusOf(c))).length;
-      const error=channelsResult.status==='rejected'?channelsResult.reason.message:health?.error || health?.scheduler_error || health?.topics?.error || (!health?'Monitor health unavailable':'');
-      document.querySelector('#sources-alert').innerHTML=error?`<p class="monitor-callout">${esc(error)}. Stored reading remains available.</p>`:'';
-      document.querySelector('#monitor-overview').dataset.health=health?.enabled===false?'disabled':health?.healthy?'healthy':'attention';
-      document.querySelector('#monitor-overview').innerHTML=`<div class="monitor-mode"><span class="health-dot" aria-hidden="true"></span><strong>${mode}</strong><span class="meta">${health?.enabled===false?'Local library available':health?.healthy?'Worker available':'Check source details below'}</span></div><dl class="monitor-metrics"><div><dt>Source feeds</dt><dd>${new Set([...observed.map(c=>c.channel),...channels.map(c=>c.name)]).size}</dd></div><div><dt>Running / queued</dt><dd>${running}</dd></div><div><dt>Need attention</dt><dd>${attention}</dd></div><div><dt>Paused</dt><dd>${paused}</dd></div></dl><div class="monitor-footnotes"><span>Topic curator: ${health?.topics?.running?'running':health?.topics?.error?'needs attention':health?.topics?.enabled===false?'disabled':health?.enabled===false?'not running':health?.schedule_enabled===false?'on request':'scheduled'}</span><span>Telemetry: ${health?.telemetry?.otlp_configured?'OTLP configured · delivery not verified':'export not configured or unavailable'}</span></div>`;
-      const focused=document.activeElement.id;
+      const errors=[health?.curation?.error,health?.error,health?.scheduler_error,health?.topics?.error,
+        channelsResult.status==='rejected'&&channelsResult.reason.message,
+        !health&&'Monitor health unavailable',observedResult.status==='rejected'&&'Library counts unavailable'].filter(Boolean);
+      document.querySelector('#sources-alert').innerHTML=errors.length?`<p class="monitor-callout">${errors.map(esc).join(' · ')}</p>`:'';
+      document.querySelector('#monitor-overview').dataset.health=health?.enabled===false?'disabled':health?.healthy&&!curationIssue&&!publicationFailed?'healthy':'attention';
+      document.querySelector('#monitor-overview').innerHTML=`<h2>Service health</h2><div class="monitor-mode"><span class="health-dot" aria-hidden="true"></span><strong>${mode}</strong><span class="meta">${health?.enabled===false?'Local library available':health?.healthy?'Worker available':'See diagnostics below'}</span></div><dl class="monitor-metrics"><div><dt>Source feeds</dt><dd>${new Set([...observed.map(c=>c.channel),...channels.map(c=>c.name)]).size}</dd></div><div><dt>Running / queued</dt><dd>${running}</dd></div><div><dt>Need attention</dt><dd>${attention}</dd></div><div><dt>Paused</dt><dd>${paused}</dd></div></dl><div class="monitor-footnotes"><span>Latest static build: ${publicationLabel}${publication?.built_at?' · '+esc(stamp(publication.built_at)):''}${editionStatus?' · '+editionStatus:''}</span><span>Running revision: <code>${esc(version?.commit?.slice(0,12)||'unavailable')}</code></span><span>Topic curator: ${health?.topics?.running?'running':health?.topics?.error?'needs attention':health?.topics?.enabled===false?'disabled':health?.enabled===false?'not running':health?.schedule_enabled===false?'on request':'scheduled'}</span><span>Telemetry: ${health?.telemetry?.otlp_configured?'OTLP configured · delivery not verified':'export not configured or unavailable'}</span></div>`;
       const open=new Set([...document.querySelectorAll('#source-list details[open]')].map(e=>e.id));
       const names=[...new Set([...channels.map(c=>c.name),...observed.map(c=>c.channel)])];
       names.sort((a,b)=>{const rank=n=>({Failed:0,Warnings:1,Running:2,Queued:2,Stale:3,'Not run yet':4,Fresh:5,Paused:6,'Stored only':7}[statusOf(channels.find(c=>c.name===n))]);return rank(a)-rank(b)||a.localeCompare(b);});
-      const list=document.querySelector('#source-list');list.innerHTML='';
+      const list=document.querySelector('#source-cards');list.innerHTML='';
       for(const name of names){
         const c=channels.find(c=>c.name===name),stats=observed.find(c=>c.channel===name),state=statusOf(c),run=c?.last_run;
         const card=document.createElement('article');card.className='source-monitor-card';card.dataset.status=state.toLowerCase().replaceAll(' ','-');
@@ -305,7 +400,7 @@ async function render(restoring=false) {
   main.setAttribute('aria-busy','true'); main.innerHTML='<p role="status">Opening your reading space…</p>';
   const path=location.pathname; const view=path==='/saved'?'saved':path.startsWith('/research')?'research':'today';
   document.querySelectorAll('[data-nav]').forEach(a=>{if(a.dataset.nav===view && !['/sources','/about','/topics'].includes(path))a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
-  document.title=`${path==='/sources'?'Sources':path==='/about'?'About':path==='/topics'?'Topic editorial':view[0].toUpperCase()+view.slice(1)} · Paperflow`;
+  document.title=`${path==='/sources'?'Operations':path==='/about'?'About':path==='/topics'?'Topic editorial':view[0].toUpperCase()+view.slice(1)} · Paperflow`;
   try {
     if(path.startsWith('/read/')) await reader(path.split('/')[2],generation);
     else if(path==='/research') await research(generation);

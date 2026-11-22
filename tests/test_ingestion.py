@@ -29,17 +29,17 @@ ATOM = b'''<feed xmlns="http://www.w3.org/2005/Atom"><title>Test</title>
 <summary>Source excerpt</summary></entry></feed>'''
 
 
-def test_rss_and_atom_discovery_separate_discussion_from_article():
+@pytest.mark.parametrize(("payload", "dated"), [(RSS, False), (ATOM, True)], ids=["rss", "atom"])
+def test_rss_and_atom_discovery_separate_discussion_from_article(payload, dated):
     channel = ChannelConfig(url="https://example.org/feed")
-    for payload in (RSS, ATOM):
-        batch = default_registry().collect("test", channel, lambda url: payload)
-        entry = batch.entries[0]
-        assert str(entry.url) == "https://example.org/article"
-        assert entry.discussion_url != entry.url
-        assert entry.excerpt == "Source excerpt"
-        assert entry.signals.score is None
-        assert entry.comments_status == "not_requested"
-    assert default_registry().collect("test", channel, lambda url: ATOM).entries[0].published_at
+    batch = default_registry().collect("test", channel, lambda url: payload)
+    entry = batch.entries[0]
+    assert str(entry.url) == "https://example.org/article"
+    assert entry.discussion_url != entry.url
+    assert entry.excerpt == "Source excerpt"
+    assert entry.signals.score is None
+    assert entry.comments_status == "not_requested"
+    assert (entry.published_at is not None) == dated
 
 
 def test_hn_enrichment_bounded_and_no_invented_comment_score():

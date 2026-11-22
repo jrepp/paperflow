@@ -1,6 +1,6 @@
 """Editorial topics sit above stable ingestion sources and immutable items."""
-from datetime import timedelta
-from typing import Literal
+from datetime import datetime, timedelta
+from typing import Literal, Self
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
@@ -97,7 +97,7 @@ class EditTopic(BaseModel):
     excluded_item_ids: tuple[UUID, ...] | None = Field(default=None, max_length=1000)
 
     @model_validator(mode='after')
-    def no_null_changes(self):
+    def no_null_changes(self) -> Self:
         for key in self.model_fields_set - {'expected_version','editor','note'}:
             if getattr(self,key) is None:
                 raise ValueError(f'{key} cannot be null')
@@ -130,7 +130,7 @@ class TopicSummary(BaseModel):
     lifecycle: Literal['active', 'quiet', 'expired']
 
 
-def relevance(sensitivity: Sensitivity, newest, at):
+def relevance(sensitivity: Sensitivity, newest: datetime | None, at: datetime) -> float:
     if newest is None:
         return 0.0
     hours = max(0, (at-newest)/timedelta(hours=1))

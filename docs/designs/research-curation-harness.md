@@ -212,15 +212,6 @@ remain unassigned. Before model work, it attempts bounded public content retriev
 one visible item per cycle, including items without a feed excerpt. Article/main
 HTML is extracted without navigation or scripts; arXiv links prefer paper HTML
 and fall back to PDF when unavailable. PDF extraction is limited to 100 pages.
-
-For sources over 30,000 characters, the decision model selects up to five exact
-6,000-character blocks (including the beginning) for the first reasoning turn.
-The reasoning model can request other passages and is told that coverage is
-incomplete. Citations are still verified against the original revision. Invalid or
-failed selection falls back to the usual source window. Set
-`research.assistant.evidence_selection_enabled` to false to disable this step.
-Selection and reasoning usage are metered separately; compare actual costs and
-quality before assuming a saving. Cached reasoning input can be inexpensive.
 Retrieved content is stored as an immutable revision, so model citations refer
 to the text actually read. Generic article HTML remains labeled excerpt because
 markup alone cannot establish complete access. Missing or inaccessible content
@@ -367,3 +358,23 @@ measurement, invented measurements with workflow text, and invented source layou
 The command exits unsuccessfully for any reference mismatch. Passing these checks
 establishes only reference agreement, not research accuracy. Evaluator v2 adds
 explicit criteria for workflow text and unsupported placement or layout claims.
+
+## Article excerpts
+
+For articles and discussion feeds, a source window over 8,000 characters triggers one metered
+decision-model call. The selector sees the lead and previews from up to 24
+blocks distributed across the configured window. The reasoning model receives
+the lead and up to three selected 2,000-character passages, with offsets in the
+original revision. The quality sample uses the same evidence. If selection
+fails, the lead, middle and ending blocks supply a bounded fallback.
+The run receipt records the selection method, ranges and character count.
+
+For papers, manuscripts, and notes with a source window over 30,000 characters,
+the decision model selects up to five exact 6,000-character blocks, including
+the beginning, for the first reasoning turn. The reasoning model can request
+additional passages and must state the limits of incomplete coverage. Citations
+are verified against the original revision. Invalid or failed selection falls
+back to the configured source window. Set
+`research.assistant.evidence_selection_enabled` to false to disable this step.
+Selection and reasoning usage are metered separately. Compare actual costs and
+quality before assuming savings, since cached reasoning input can be inexpensive.

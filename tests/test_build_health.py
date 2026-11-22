@@ -1,5 +1,6 @@
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.error import HTTPError
 
 from fastapi.testclient import TestClient
 import pytest
@@ -57,7 +58,7 @@ def test_heartbeat_does_not_follow_redirects_or_accept_false_acknowledgments():
     try:
         ping(base+'/check', True)
         ping(base+'/check', False)
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPError, match="302"):
             ping(base+'/redirect', True)
         with pytest.raises(RuntimeError):
             ping(base+'/missing', True)

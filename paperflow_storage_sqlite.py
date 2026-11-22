@@ -56,6 +56,18 @@ CREATE INDEX IF NOT EXISTS story_assessment_story ON research_story_assessments(
 CREATE TABLE IF NOT EXISTS research_story_sources (story_id TEXT NOT NULL REFERENCES research_stories(id), item_id TEXT NOT NULL REFERENCES research_items(id), payload TEXT NOT NULL, PRIMARY KEY(story_id,item_id));
 CREATE TABLE IF NOT EXISTS research_story_pending (assessment_id TEXT PRIMARY KEY REFERENCES research_story_assessments(id), story_id TEXT NOT NULL REFERENCES research_stories(id));
 
+CREATE TABLE IF NOT EXISTS research_study_threads (
+ id TEXT PRIMARY KEY, question TEXT NOT NULL, seed_revision_id TEXT NOT NULL REFERENCES research_revisions(id)
+);
+CREATE TABLE IF NOT EXISTS research_study_readings (
+ thread_id TEXT NOT NULL REFERENCES research_study_threads(id),
+ revision_id TEXT NOT NULL REFERENCES research_revisions(id),
+ assessment_id TEXT NOT NULL UNIQUE REFERENCES research_story_assessments(id),
+ contribution TEXT NOT NULL, passage TEXT NOT NULL, PRIMARY KEY(thread_id,revision_id)
+);
+
+CREATE INDEX IF NOT EXISTS study_reading_revision ON research_study_readings(revision_id);
+
 CREATE TABLE IF NOT EXISTS editorial_topics (
  id TEXT PRIMARY KEY, topic_key TEXT NOT NULL UNIQUE, payload TEXT NOT NULL
 );
@@ -197,6 +209,17 @@ class SQLiteResearchRepository(StoryRepositoryMixin):
             results.append(TopicCandidate(item_id=observation.item_id,observation_id=observation.id,
                 first_seen_at=first,title=observation.entry.title,excerpt=observation.entry.excerpt[:2000],channel=observation.channel))
         return results
+
+    def published_topic_members(self, start, end):
+        if not self._conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='editorial_topics'").fetchone():
+            return []
+        rows = self._conn.execute("""SELECT t.id,json_extract(t.payload,'$.title'),m.item_id
+            FROM editorial_topics t JOIN editorial_topic_members m ON m.topic_id=t.id
+            AND m.run_id=json_extract(t.payload,'$.current_run_id')
+            WHERE json_extract(t.payload,'$.editorial_status')='published'
+            AND julianday(m.first_seen_at)>=julianday(?) AND julianday(m.first_seen_at)<julianday(?)
+            ORDER BY json_extract(t.payload,'$.title'),t.id""", (start.isoformat(),end.isoformat()))
+        return [tuple(row) for row in rows]
 
     def topics(self):
         from paperflow_topic_models import Topic

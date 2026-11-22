@@ -185,5 +185,5 @@ class LifecycleEvent(AuthoredRecord):
     entity_kind: Literal["bucket", "membership", "claim"]
     version: int = Field(ge=2)
     action: Text
-    before: dict
-    after: dict
+    before: dict[object, object]
+    after: dict[object, object]

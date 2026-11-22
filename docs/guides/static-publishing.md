@@ -121,3 +121,35 @@ address, User-Agent and Accept-Language using HMAC-SHA256. Its separate
 preserve continuity across restarts. Rating rows contain the pseudonym, target,
 version and vote. There is no reader account. A shared browser/network can share
 an identifier, and a network or browser change can produce another.
+
+## Reader and operator status
+
+Each edition records `service_status` in build.json and renders its meaning and
+UTC timestamp in the HTML. A build samples the monitor once. Curation failures
+can delay analysis even while the service accepts requests. Collection failures,
+stale scheduled feeds, and scheduler or topic failures can delay updates.
+Offline builds and unavailable monitors show unknown status. A browser opening
+an edition over a day old also flags its age. Detailed failure records stay in
+the live workspace.
+
+Open **Operations** at `/sources` in the live reader to inspect readiness, the
+running revision, the latest generated edition, queue counts and failure details.
+The pipeline lists story assessment and curation analysis in order of urgency.
+Each stage shows its current-harness queue, active item when available, oldest
+wait, successes, failures and interruptions over the last 24 hours, and most
+recent success and failure. Overdue work, failed attempts, budget blocks, and
+day-old queues with no completions appear ahead of stages completing work.
+Request a bounded curation cycle there or inspect and operate individual feeds.
+The build receipt describes local generation. The publication consumer verifies
+and promotes the release independently.
+
+Use **Topic or source** and **Type** above the public feed to narrow an edition.
+Choose **Papers** to read papers across sources. A curated story matches when
+one of its selected sources meets both filters. The URL retains the selection
+for bookmarks, reloads and browser history. Filtering works within a downloaded
+edition without a connection. With JavaScript disabled the complete edition
+remains readable.
+
+Operations opens on Pipeline health. The section links open individual panes
+for diagnostics, quality, usage and spend, service health, feed administration,
+and ingestion history. Each pane can be bookmarked.

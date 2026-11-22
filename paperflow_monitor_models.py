@@ -1,10 +1,18 @@
 """Durable integration-monitor records exposed by the service API."""
 from typing import Literal
+from enum import StrEnum
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 RunStatus = Literal["queued", "running", "succeeded", "degraded", "failed", "interrupted"]
+
+
+class PublicationStatus(StrEnum):
+    CURRENT = 'current'
+    DELAYED = 'updates_delayed'
+    CURATION_DELAYED = 'curation_delayed'
+    UNKNOWN = 'unknown'
 
 
 class CurationTrigger(BaseModel):

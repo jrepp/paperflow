@@ -31,7 +31,7 @@ the same pins. Re-run `direnv allow` after reviewing changes to `.envrc`.
 
 Dependency groups and extras are declared in `pyproject.toml`; `uv.lock` locks
 the resolved versions. Development tools are pinned exactly, including
-Docuchango, Ruff, pre-commit, actionlint-py and Twine. The build backend is pinned
+Docuchango, Ruff, mypy, pre-commit, actionlint-py and Twine. The build backend is pinned
 in `build-system.requires`. Change versions deliberately, run `uv lock`, and
 validate the resulting lockfile and package. CI never repairs the lockfile.
 
@@ -40,7 +40,10 @@ validate the resulting lockfile and package. CI never repairs the lockfile.
 | Command | Local hooks / CI behavior |
 | --- | --- |
 | `scripts/check security` | Gitleaks credentials, personal home paths, private addresses, and personal email checks on publishable files |
-| `scripts/check code` | Lock consistency, Ruff correctness rules, non-Docker unit tests |
+| `scripts/check lint` | Ruff checks Python source and tests for unused names, common bugs, and Pylint errors |
+| `scripts/check types` | Strict mypy checks the research, ingestion, monitor, story, topic, and assistant model modules |
+| `scripts/check tests` | Lock consistency, the non-Docker test suite, and linked backend acceptance journeys |
+| `scripts/check code` | Runs lint, types, then tests |
 | `scripts/check docs` | Docuchango dry-run validation of config, frontmatter, names, links and index coverage |
 | `scripts/check workflows` | actionlint syntax and expression checks; external shellcheck/pyflakes integrations disabled consistently |
 | `scripts/check release` | VERSION, package version, lockfile and release manifest agreement; updater and module checks |
@@ -56,10 +59,15 @@ whole relevant tree. Run them explicitly with:
 uv run --locked pre-commit run --all-files
 ```
 
-Ruff currently enforces syntax and undefined-name correctness, not a whole-repo
-formatting migration. Expand style rules as focused changes. Docker tests and
-package smoke tests run in CI in addition to the local hooks; they can also be
-run locally with the commands above. CI uses GitHub-hosted Linux runners, not
+For a short feedback loop, run `scripts/check lint` and `scripts/check types`
+while editing. Both are read-only. The commit hooks and CI run each layer
+independently, including when the change is to tool configuration.
+
+To expand coverage, enable a Ruff rule in `[tool.ruff.lint]` or add a module to
+`[tool.mypy].files` in `pyproject.toml`. Fix the findings and rerun that layer.
+Mypy checks the minimum supported Python version and uses the Pydantic plugin
+for model fields and constructors. Docker tests and package smoke tests also run
+in CI and can be run locally with the commands above. CI uses GitHub-hosted Linux runners, not
 host-specific deployment runners.
 
 ## Documentation layout

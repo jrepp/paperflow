@@ -105,7 +105,7 @@ test('source operations show failed and paused states with working recovery cont
     expect(route.request().method()).toBe('PATCH'); channel.paused=route.request().postDataJSON().paused;await route.fulfill({json:[channel]});
   });
   await page.route('**/api/monitor/channels/fixture/runs',route=>route.fulfill({status:202,json:{id:'queued-run'}}));
-  await page.goto('/sources');await expect(page.getByText('Upstream unavailable',{exact:true})).toBeVisible();
+  await page.goto('/sources#source-list');await expect(page.getByText('Upstream unavailable',{exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Pause ingestion',exact:true}).click();
   await expect(page.getByRole('button',{name:'Fetch now',exact:true})).toBeDisabled();
   await page.getByRole('button',{name:'Resume ingestion',exact:true}).click();
@@ -272,10 +272,11 @@ test('source heads-up merges feeds and updates progress without losing focus',as
   await page.route('**/api/monitor/channels',route=>{polls++;return route.fulfill({json:[channel]});});
   await page.route('**/api/monitor/runs?limit=10',route=>route.fulfill({json:[]}));
   await page.route('**/health/ready',route=>route.fulfill({json:{healthy:true,enabled:true,schedule_enabled:false,telemetry:{otlp_configured:true},topics:{enabled:true,running:false}}}));
-  await page.goto('/sources');
+  await page.goto('/sources#monitor-overview');
+  await expect(page.getByText('Manual collection',{exact:true})).toBeVisible();
+  await page.getByRole('link',{name:'Source feeds',exact:true}).click();
   const card=page.locator('.source-monitor-card').filter({has:page.getByRole('heading',{name:'science',exact:true})});
   await expect(card).toHaveCount(1);
-  await expect(page.getByText('Manual collection',{exact:true})).toBeVisible();
   await expect(card).toContainText('2 / 5 in this stage');
   await expect(card.getByRole('button',{name:'Fetch now',exact:true})).toBeDisabled();
   await card.getByText('Run details',{exact:true}).click();

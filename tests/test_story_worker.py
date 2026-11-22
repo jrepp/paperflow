@@ -432,3 +432,65 @@ def test_topic_category_is_limited_to_configured_choices(tmp_path):
         return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {'category': 'computing'})])
     assert asyncio.run(choose_category(context, item.model_dump(mode='json'), FunctionModel(respond))) == 'computing'
     assert worker.store.request_metrics('classification', 1)[0]['role'] == 'topic_classification'
+
+
+def test_curator_builds_study_across_independent_story_decisions(tmp_path, monkeypatch):
+    from datetime import timedelta
+    from paperflow_publish_site import build_site_from_storage
+
+    monkeypatch.setattr('paperflow_story_vectors.semantic_candidates', lambda *args, **kwargs: [])
+    settings, storage, item, rev, output = fixture(tmp_path)
+    observe(storage, item)
+    question = 'How does latency change with index size?'
+    def assess(ctx, source, candidates):
+        if source['id'] == str(item.id):
+            assert not ctx.study_questions
+            result = decision('new_story', text=ctx.revision.markdown)
+        else:
+            assert question in ctx.study_questions
+            result = decision('unresolved')
+        result['study_reading'] = {'question': question, 'contribution': 'Compare <benchmark> conditions.',
+                                   'passage_id': 1}
+        return result
+    worker = AssistantWorker(settings, runner=runner(output), assessment_runner=assess)
+    worker.initialize()
+    assert worker.tick()['outcome'] == 'new_story'
+    assert worker.tick()['status'] == 'succeeded'
+    later = datetime.now(UTC) + timedelta(days=14)
+    service = CurationService(storage)
+    other = service.add(Item(kind='paper', title='Scaling benchmark', published_at=later,
+                             canonical_url='https://example.org/scale'))
+    other_rev = service.add(ContentRevision.from_markdown(item_id=other.id, evidence_basis='abstract',
+        markdown='The authors compared three index sizes under the same workload.'))
+    observe(storage, other)
+    assert worker.tick()['outcome'] == 'unresolved'
+    assert worker.tick() is None
+    with storage.transaction() as repo:
+        assert len(repo.published_stories()) == 1
+        assert len(repo.published_study_threads({other.id})[0]['readings']) == 2
+    manifest = build_site_from_storage(storage, tmp_path/'site', now=later)
+    assert manifest['total_study_threads'] == 1 and manifest['total_stories'] == 0
+    page = (tmp_path/'site/index.html').read_text()
+    thread = page.split('<section id="study-threads">')[1].split('</section>')[0]
+    assert question in thread and '<summary>2 readings</summary>' in thread
+    assert thread.index(rev.markdown) < thread.index(other_rev.markdown)
+    assert 'Compare &lt;benchmark&gt;' in thread and 'href="https://example.org/scale"' in thread
+    with storage.transaction(write=True) as repo:
+        repo._conn.execute('DELETE FROM research_public_revisions WHERE revision_id=?', (str(rev.id),))
+        assert not repo.study_questions('latency')
+        assert not repo.published_study_threads({other.id})
+
+
+def test_invalid_study_passage_cannot_create_thread_or_story(tmp_path, monkeypatch):
+    monkeypatch.setattr('paperflow_story_vectors.semantic_candidates', lambda *args, **kwargs: [])
+    settings, storage, item, rev, output = fixture(tmp_path)
+    observe(storage, item)
+    choice = decision('new_story', text=rev.markdown)
+    choice['study_reading'] = {'question': 'What affects latency?', 'contribution': 'A baseline.',
+                               'passage_id': 99}
+    worker = AssistantWorker(settings, runner=runner(output), assessment_runner=lambda *args: choice)
+    worker.initialize()
+    assert worker.tick()['status'] == 'failed'
+    with storage.transaction() as repo:
+        assert repo.story_assessments(revision_id=rev.id) == []
+        assert repo.study_questions('latency') == []

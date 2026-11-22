@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 import sys
 import threading
@@ -331,3 +330,24 @@ def test_jitter_can_be_disabled(tmp_path, monkeypatch):
     store.schedule_due();run,_=store.claim()
     store.finish(run.id,batch=None,error='OSError',duration=1)
     assert store.channels()[0].next_due_at.timestamp()==1060
+
+
+def test_publication_status_respects_feed_pause_schedule_and_failures(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from paperflow_monitor_models import PublicationStatus
+
+    monitor = IntegrationMonitor(settings(tmp_path))
+    health = {'healthy': True, 'scheduler_running': True, 'scheduler_error': None,
+              'overdue_runs': [], 'schedule_enabled': True, 'topics': {'error': None},
+              'curation': {'enabled': False}}
+    monkeypatch.setattr(monitor, 'health', lambda: health)
+    feed = SimpleNamespace(paused=False, stale=True, consecutive_failures=0, last_run=None)
+    monkeypatch.setattr(monitor.store, 'channels', lambda: [feed])
+    assert monitor.publication_status() == PublicationStatus.DELAYED
+    feed.paused = True
+    assert monitor.publication_status() == PublicationStatus.CURRENT
+    health['schedule_enabled'] = False
+    feed.paused = False
+    assert monitor.publication_status() == PublicationStatus.UNKNOWN
+    feed.consecutive_failures = 3
+    assert monitor.publication_status() == PublicationStatus.DELAYED

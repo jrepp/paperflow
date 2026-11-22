@@ -22,6 +22,7 @@ from importlib.resources import files
 
 from paperflow_domain import ContentRevision, Item
 from paperflow_ingest_models import SourceObservation
+from paperflow_monitor_models import PublicationStatus
 from paperflow_settings import PublishingSettings, load_research_settings
 from paperflow_storage_sqlite import SQLiteResearchStorage
 
@@ -62,14 +63,15 @@ def build_site(config_path: str, out_dir: str | Path, *, window_hours: int = DEF
     return build_site_from_storage(SQLiteResearchStorage(settings.storage), out_dir,
                                    window_hours=window_hours, per_channel_limit=per_channel_limit, now=now,
                                    workspace_url=settings.publishing.workspace_url,
-                                   assistant_store=_assistant_store(settings.assistant), releases_dir=settings.publishing.releases_dir)
+                                   topic_settings=settings.topics, assistant_store=_assistant_store(settings.assistant), releases_dir=settings.publishing.releases_dir)
 
 
 def build_site_from_storage(storage: SQLiteResearchStorage, out_dir: str | Path, *,
                             window_hours: int = DEFAULT_WINDOW_HOURS,
                             per_channel_limit: int = DEFAULT_PER_CHANNEL_LIMIT,
                             now: datetime | None = None, workspace_url: str | None = None,
-                            assistant_store=None, releases_dir: Path | None = None) -> dict:
+                            assistant_store=None, releases_dir: Path | None = None, topic_settings=None,
+                            publication_status: PublicationStatus = PublicationStatus.UNKNOWN) -> dict:
     """Render the published bundle from an existing research storage."""
     workspace_url = PublishingSettings(workspace_url=workspace_url).workspace_url
     if not 1 <= window_hours <= 24 * 30:
@@ -79,13 +81,31 @@ def build_site_from_storage(storage: SQLiteResearchStorage, out_dir: str | Path,
     now = now or datetime.now(timezone.utc)
     cards = {}
     stories = []
+    study_threads = []
     with storage.transaction() as repo:
         sections = publication_sections(repo, now=now, window_hours=window_hours,
                                         per_channel_limit=per_channel_limit)
         selected_ids = {item.id for section in sections for _, item in section["items"]}
+        from paperflow_topic_models import TopicSettings
+        topic_settings = topic_settings or TopicSettings()
+        public_ids = {str(item_id) for item_id in selected_ids}
+        topics_by_item = {}
+        topic_titles = {}
+        if topic_settings.enabled:
+            start = now - timedelta(hours=topic_settings.window_hours)
+            for topic_id, title, item_id in repo.published_topic_members(start, now):
+                if item_id in public_ids:
+                    topic_titles[topic_id] = title
+                    topics_by_item.setdefault(item_id, []).append(topic_id)
+        filters_by_item = {}
+        for section in sections:
+            for _, item in section["items"]:
+                filters_by_item.setdefault(item.id, []).append(
+                    [section["name"], item.kind, topics_by_item.get(str(item.id), [])])
         story_items = set()
         if hasattr(repo, "story_schema_available") and repo.story_schema_available():
             stories = _story_projection(repo, selected_ids)
+            study_threads = repo.published_study_threads(selected_ids)
             story_items = repo.story_associated_items()
         manifest_sections = [{"name": section["name"], "count": len(section["items"])} for section in sections]
         attached = {source["item"].id for story in stories for source in story["sources"]}
@@ -121,16 +141,19 @@ def build_site_from_storage(storage: SQLiteResearchStorage, out_dir: str | Path,
     build_id = now.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     manifest = {
         "build_id": build_id,
+        "service_status": PublicationStatus(publication_status).value,
         "created_utc": now.astimezone(timezone.utc).isoformat(),
         "epoch": int(now.timestamp()),
         "policy": {"window_hours": window_hours, "per_channel_limit": per_channel_limit},
         "channels": manifest_sections,
         "total_items": sum(section["count"] for section in manifest_sections),
         "total_stories": len(stories),
+        "total_study_threads": len(study_threads),
     }
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "index.html").write_text(_render(sections, manifest, workspace_url=workspace_url, cards=cards, stories=stories), encoding="utf-8")
+    (out / "index.html").write_text(_render(sections, manifest, workspace_url=workspace_url, cards=cards, stories=stories, study_threads=study_threads,
+                                         filters_by_item=filters_by_item, topic_titles=topic_titles), encoding="utf-8")
     (out / "build.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return manifest
 
@@ -292,11 +315,11 @@ def _card_actions(kind=None, record_id=None, version=None):
     return ''.join(parts)
 
 
-def _story_row(row, now, anchors):
+def _story_row(row, now, anchors, filters):
     story = row["story"]
     esc = html.escape
     summary = next((line.strip() for line in story.account.splitlines() if line.strip() and not line.lstrip().startswith('#')), '')
-    parts = [f'<li class="feed-row"><article id="story-{story.id}" tabindex="-1">',
+    parts = [f'<li class="feed-row"><article id="story-{story.id}" data-feed-filters="{html.escape(json.dumps(filters), quote=True)}" tabindex="-1">',
              '<h2><a href="#story-account-' + str(story.id) + '">' + esc(story.title) + '</a></h2>',
              '<div class="meta item-meta">Updated ' + esc(_age_text(story.material_at, now)) + '</div>',
              '<p>' + esc(summary) + '</p>',
@@ -339,6 +362,22 @@ def _story_row(row, now, anchors):
         parts.append('</li>')
     parts.append('</ul></div></details>'
                  '<p class="rating-receipt" hidden></p></article></li>')
+    return ''.join(parts)
+
+
+def _study_thread(thread):
+    anchor = 'study-' + thread['id']
+    question = html.escape(thread['question'])
+    readings = thread['readings']
+    count = f'{len(readings)} reading' + ('s' if len(readings) != 1 else '')
+    parts = [f'<article id="{anchor}"><h3><a href="#{anchor}">{question}</a></h3>',
+             f'<details><summary>{count}</summary><ol>']
+    for source_title, source_url, contribution, passage in readings:
+        url = html.escape(source_url, quote=True)
+        title = f'<a href="{url}">{html.escape(source_title)}</a>'
+        parts.append(f'<li>{title}<p>{html.escape(contribution)}</p>'
+                     f'<blockquote>{html.escape(passage)}</blockquote></li>')
+    parts.append('</ol></details></article>')
     return ''.join(parts)
 
 
@@ -522,7 +561,7 @@ def _host(url: str | None) -> str:
     return rest.split("/", 1)[0]
 
 
-def _item_li(pair: tuple[datetime, object], now: datetime, cards: dict, suffix: str = "") -> str:
+def _item_li(pair: tuple[datetime, object], now: datetime, cards: dict, suffix: str, filters) -> str:
     when, item = pair
     url = html.escape(str(item.canonical_url or ""))
     host = html.escape(_host(str(item.canonical_url or "")))
@@ -530,14 +569,16 @@ def _item_li(pair: tuple[datetime, object], now: datetime, cards: dict, suffix: 
     age = html.escape(_age_text(when, now))
     ref = f'<a href="{url}">{title}</a>' if url else title
     meta = f"{host} · {age}" if host else age
-    return f'<li class="feed-row"><article id="item-{item.id}{suffix}" tabindex="-1"><h2>{ref}</h2><div class="meta item-meta">{meta}</div>{_card(item, cards.get(item.id, {}))}<p class="rating-receipt" hidden></p></article></li>'
+    return f'<li class="feed-row"><article id="item-{item.id}{suffix}" data-feed-filters="{html.escape(json.dumps(filters), quote=True)}" tabindex="-1"><h2>{ref}</h2><div class="meta item-meta">{meta}</div>{_card(item, cards.get(item.id, {}))}<p class="rating-receipt" hidden></p></article></li>'
 
 
-def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None = None, cards: dict | None = None, stories: list[dict] | None = None) -> str:
+def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None = None, cards: dict | None = None, stories: list[dict] | None = None,
+            filters_by_item: dict, topic_titles: dict, study_threads=()) -> str:
     now = datetime.fromtimestamp(manifest["epoch"], tz=timezone.utc)
     cards = cards or {}
     esc = html.escape
-    latest = _balanced(sections)
+    latest = _balanced([{**section, "items": [(when,item,section["name"]) for when,item in section["items"]]}
+                        for section in sections])
     stories = stories or []
     # Embed the same packaged stylesheet as the interactive reader so published
     # bundles work offline and never depend on a live application's asset route.
@@ -546,6 +587,14 @@ def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None =
     amount, unit = (hours // 24, 'day') if hours % 24 == 0 else (hours, 'hour')
     window = f"{amount} {unit}{'s' if amount != 1 else ''}"
     limit = manifest['policy']['per_channel_limit']
+    status = PublicationStatus(manifest.get('service_status', 'unknown'))
+    status_text = {
+        PublicationStatus.CURRENT: 'Updates were running normally.',
+        PublicationStatus.CURATION_DELAYED: 'Curation is delayed. Some stories may be missing analysis.',
+        PublicationStatus.DELAYED: 'Updates are delayed. Some stories or analyses may arrive late.',
+        PublicationStatus.UNKNOWN: 'Service status was unavailable.',
+    }[status]
+    status_class = 'monitor-callout' if status in (PublicationStatus.DELAYED, PublicationStatus.CURATION_DELAYED) else 'muted'
     parts = [
         '<!doctype html><html lang="en"><head>',
         '<meta charset="utf-8">',
@@ -560,6 +609,8 @@ def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None =
         'and browser request headers and stores the rating identifier without the raw inputs.</p></details></div></header>',
         '<main id="main" class="shell py-8" tabindex="-1">',
         '<h1>Latest Stories</h1>',
+        f'<p class="{status_class}" id="publication-status"><strong>{status_text}</strong> '
+        f'Status at publication · <time datetime="{now.isoformat()}">{now:%Y-%m-%d %H:%M UTC}</time></p>',
         '<p class="muted published-intro">Recent reading from all sources. <strong>AI curation</strong> · Ratings are pseudonymous.</p>',
         '<details class="rating-privacy"><summary>How stories are selected</summary>'
         f'<p>The feed selects up to {limit} recent items per source from the past {window}, '
@@ -567,22 +618,45 @@ def _render(sections: list[dict], manifest: dict, *, workspace_url: str | None =
         'is selected. Curation can draw on older related sources, and stories may leave this feed as the window moves.</p></details>',
         '<div class="sr-status" id="rating-announcement" role="status" aria-live="polite"></div>',
     ]
+    if study_threads:
+        parts.append('<p><a href="#study-threads">Threads of study</a></p>')
     if latest or stories:
         anchors = {pair[1].id for pair in latest}
-        rows = [(row["story"].material_at, _story_row(row, now, anchors)) for row in stories]
+        source_options = ''.join(f'<option value="channel:{esc(c["name"], quote=True)}">{esc(c["name"])}</option>'
+                                 for c in manifest["channels"])
+        topic_options = ''.join(f'<option value="topic:{esc(key, quote=True)}">{esc(title)}</option>'
+                               for key,title in topic_titles.items())
+        topic_group = f'<optgroup label="Topics">{topic_options}</optgroup>' if topic_options else ''
+        kinds = {kind for entries in filters_by_item.values() for _,kind,_ in entries}
+        labels = {'paper':'Papers','article':'Articles','discussion':'Discussions','note':'Notes','manuscript':'Manuscripts'}
+        kind_options = ''.join(f'<option value="{esc(kind)}">{esc(labels.get(kind, kind))}</option>' for kind in sorted(kinds))
+        parts.append('<div id="published-filters" class="feed-toolbar" hidden><div><label for="published-channel">Topic or source</label> '
+                     '<select id="published-channel"><option value="">All channels</option>' + topic_group +
+                     f'<optgroup label="Source feeds">{source_options}</optgroup></select></div>'
+                     f'<div><label for="published-kind">Type</label> <select id="published-kind"><option value="">All types</option>{kind_options}</select></div>'
+                     '<span id="filtered-count" role="status"></span></div>')
+        rows = []
+        for row in stories:
+            filters = [entry for src in row["sources"] for entry in filters_by_item.get(src["item"].id, [])]
+            rows.append((row["story"].material_at, _story_row(row, now, anchors, filters)))
         seen = set()
-        for pair in latest:
-            item_id = pair[1].id
+        for when, item, channel in latest:
+            item_id = item.id
             suffix = f"-{len(rows)}" if item_id in seen else ""
-            rows.append((pair[0], _item_li(pair, now, cards, suffix)))
+            filters = [entry for entry in filters_by_item[item_id] if entry[0] == channel]
+            rows.append((when, _item_li((when,item), now, cards, suffix, filters)))
             seen.add(item_id)
         if stories:
             rows.sort(key=lambda row: row[0], reverse=True)
         parts.append('<ol class="feed-list" role="list">' + ''.join(row[1] for row in rows) + '</ol>')
     else:
         parts.append("<p>No recent items yet.</p>")
+    if study_threads:
+        parts.append('<section id="study-threads"><h2>Threads of study</h2>')
+        parts.extend(_study_thread(thread) for thread in study_threads)
+        parts.append('</section>')
     parts.extend(_story_document(row) for row in stories)
-    documents = {item.id: item for _, item in latest}
+    documents = {item.id: item for _, item, _ in latest}
     parts.extend(_document(item, cards.get(item.id, {})) for item in documents.values())
     parts.append("</main>")
     workspace_link = f' · <a href="{esc(workspace_url, quote=True)}">Open workspace</a>' if workspace_url else ""

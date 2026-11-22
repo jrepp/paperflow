@@ -38,5 +38,5 @@ class APIClient:
         except urllib.error.HTTPError as exc:
             detail = exc.read(8192).decode("utf-8", errors="replace")
             raise APIError(f"HTTP {exc.code}: {detail}") from None
-        except (urllib.error.URLError, TimeoutError) as exc:
+        except (urllib.error.URLError, TimeoutError):
             raise APIError("Cannot reach Paperflow API; start 'paperflow serve' or check --api-url") from None

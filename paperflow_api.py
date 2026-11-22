@@ -35,7 +35,7 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
     publisher = None
     if settings.publishing.build_api_enabled:
         from paperflow_publish_api import BuildService
-        publisher = BuildService(storage, settings.publishing, settings.assistant)
+        publisher = BuildService(storage, settings.publishing, settings.assistant, status_provider=monitor.publication_status, topic_settings=settings.topics)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -167,14 +167,22 @@ def create_app(settings: ResearchSettings | None = None, *, monitor: Integration
             raise HTTPException(503, "Monitor is disabled in this API process")
         return monitor.store.runs(limit)
 
+    @app.get("/api/monitor/publication", tags=["monitor"])
+    def publication_summary():
+        return publisher.publication_summary() if publisher else {"status": "disabled"}
+
     @app.get("/api/monitor/curation")
     def curation_metrics(days: int = Query(default=7, ge=1, le=365),
                          planned_items_per_day: int | None = Query(default=None, ge=1, le=10000)):
         if not monitor.assistant:
             return {"enabled": False}
-        return {"enabled": True, **monitor.assistant.store.metrics(),
+        from paperflow_assistant.runtime import fingerprint
+        diagnostics = monitor.assistant.store.diagnostics(settings.assistant)
+        stages = monitor.assistant.store.pipeline_stages(fingerprint(settings.assistant),
+            overdue=monitor.health()['curation']['overdue'], budget_blocked=diagnostics['queue_blocked_reason'] == 'token_limit')
+        return {"enabled": True, **monitor.assistant.store.metrics(), "stages": stages,
                 "spend": monitor.assistant.store.spend(days, planned_items_per_day),
-                "diagnostics": monitor.assistant.store.diagnostics(settings.assistant),
+                "diagnostics": diagnostics,
                 "schedule": {"interval_seconds": settings.assistant.interval_seconds,
                              "items_per_cycle": settings.assistant.items_per_cycle,
                              "rolling_token_limit": settings.assistant.rolling_token_limit}}
