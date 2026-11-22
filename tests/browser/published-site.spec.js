@@ -47,12 +47,36 @@ test('story account is readable, navigable, and safe across viewport sizes', asy
   execFileSync('uv', ['run', '--locked', '--group', 'dev', '--extra', 'test', 'python', '-c',
     "import runpy,sys; from pathlib import Path; runpy.run_path('tests/test_publish_site.py')['test_real_story_publication_discloses_pending_contribution'](Path(sys.argv[1]))", directory]);
   await page.goto(pathToFileURL(`${directory}/site/index.html`).href);
+  const nav = page.getByRole('navigation', {name:'Edition'});
+  const storiesView = page.locator('#stories');
+  const threadsView = page.locator('#study-threads');
+  const sourcesView = page.locator('#source-feed');
+  await expect(storiesView).toBeVisible();
+  await expect(threadsView).toBeHidden();
+  await expect(sourcesView).toBeHidden();
+  await nav.getByRole('link', {name:'Threads'}).click();
+  await expect(threadsView).toBeVisible();
+  await expect(storiesView).toBeHidden();
+  await expect(sourcesView).toBeHidden();
+  await nav.getByRole('link', {name:'Sources'}).click();
+  await page.reload();
+  await expect(sourcesView).toBeVisible();
+  await expect(threadsView).toBeHidden();
+  await expect(storiesView).toBeHidden();
+  await page.goBack();
+  await expect(nav.getByRole('link', {name:'Threads'})).toHaveAttribute('aria-current','page');
+  await expect(threadsView).toBeVisible();
+  await nav.getByRole('link', {name:'Stories'}).click();
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({width, height: width === 1440 ? 960 : 844});
     const story = page.locator('article[id^="story-"]');
     await story.getByRole('link', {name: 'Finding', exact: true}).click();
     const account = page.getByRole('region', {name: 'Story and curation'});
     await expect(account).toBeVisible();
+    await expect(storiesView).toBeHidden();
+    await expect(account.locator('.document-back')).toBeFocused();
+    expect(await account.evaluate(el => getComputedStyle(el).outlineStyle)).toBe('none');
+    await expect(nav).toBeInViewport();
     await expect(account.locator('.document-prose')).toContainText('Original account');
     await account.getByText('Sources (2)', {exact:true}).click();
     await expect(account.getByRole('link', {name:'Primary source'})).toHaveAttribute('href','https://example.org/feed/0');
@@ -63,7 +87,7 @@ test('story account is readable, navigable, and safe across viewport sizes', asy
     const result = await new AxeBuilder({page}).analyze();
     expect(result.violations).toEqual([]);
     await page.screenshot({path: testInfo.outputPath(`story-${width}.png`)});
-    await account.getByRole('link', {name: 'Back to story'}).click();
+    await account.getByRole('link', {name: 'Back to stories'}).click();
     await expect(story).toBeFocused();
     const summary = story.locator('summary');
     await summary.focus();
@@ -85,7 +109,7 @@ test('story account is readable, navigable, and safe across viewport sizes', asy
   await expect(thread).toBeVisible();
   await thread.getByRole('link', {name:'Back to thread question'}).click();
   await expect(page.locator('#study-threads a')).toBeFocused();
-  await page.getByRole('navigation', {name:'Edition'}).getByRole('link', {name:'Browse sources'}).click();
+  await page.getByRole('navigation', {name:'Edition'}).getByRole('link', {name:'Sources'}).click();
   const feed = page.locator('#source-feed');
   await expect(feed.locator('article')).toHaveCount(2);
   await feed.getByRole('link', {name:'Finding', exact:true}).first().click();
