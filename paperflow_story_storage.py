@@ -160,12 +160,13 @@ class StoryRepositoryMixin:
         active = set()
         for thread_id, question, seed, revision_id, payload, contribution, passage, source_url in rows:
             if thread_id not in threads:
-                threads[thread_id] = ({'id': thread_id, 'question': question, 'readings': []}
+                threads[thread_id] = ({'id': thread_id, 'question': question, 'readings': [], 'revision_ids': []}
                                       if self._public_study_source(seed) else None)
             thread = threads[thread_id]
             if thread is None or not self._public_study_source(revision_id):
                 continue
             item = Item.model_validate_json(payload)
+            thread['revision_ids'].append(revision_id)
             thread['readings'].append((item.title, str(item.canonical_url or source_url), contribution, passage))
             if item.id in selected_ids:
                 active.add(thread_id)
