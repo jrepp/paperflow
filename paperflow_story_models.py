@@ -1,6 +1,5 @@
 """Durable story and source contribution records."""
-from datetime import datetime
-from typing import Literal
+from typing import Literal, Self
 from uuid import UUID
 
 from pydantic import AwareDatetime, Field, model_validator
@@ -37,7 +36,7 @@ class StoryAssessment(AuthoredRecord):
     prior_assessment_id: UUID | None = None
 
     @model_validator(mode='after')
-    def validate_candidate(self):
+    def validate_candidate(self) -> Self:
         if self.outcome in ('repeated_coverage', 'material_contribution') and (self.story_id is None or self.story_version is None):
             raise ValueError('existing story and version required')
         if self.outcome == 'new_story' and self.story_version is not None:

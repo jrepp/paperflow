@@ -44,7 +44,7 @@ def test_full_curator_journey_and_export(client):
     quote = post(client, f"/revisions/{source_revision['id']}/annotations", {"quote": "Models work", "creator": "researcher"})
     claim = post(client, f"/buckets/{bucket['id']}/claims", {"statement": "Models improve every task", "creator": "researcher", "source_annotation_id": quote["id"]})
     supporting = post(client, f"/claims/{claim['id']}/evidence", {"revision_id": revision["id"], "stance": "supports", "rationale": "Task A only", "creator": "researcher"})
-    challenging = post(client, f"/claims/{claim['id']}/evidence", {"revision_id": revision["id"], "stance": "challenges", "rationale": "Not Task B", "creator": "researcher"})
+    post(client, f"/claims/{claim['id']}/evidence", {"revision_id": revision["id"], "stance": "challenges", "rationale": "Not Task B", "creator": "researcher"})
     post(client, f"/evidence/{supporting['id']}/reviews", {"decision": "accepted", "reviewer": "reviewer"})
     post(client, f"/evidence/{supporting['id']}/reviews", {"decision": "rejected", "reviewer": "reviewer", "note": "Too broad"})
     detail = client.get(f"/api/research/buckets/{bucket['id']}").json()

@@ -51,7 +51,7 @@ def test_atomic_pending_updates_and_rollback_compatible_schema(tmp_path):
     revisions = [ContentRevision.from_markdown(item_id=x.id, markdown=x.title) for x in (first, second)]
     story = Story(title=first.title)
     with storage.transaction(write=True) as repo:
-        for item, revision in zip((first, second), revisions):
+        for item, revision in zip((first, second), revisions, strict=True):
             repo.add(item)
             repo.add(revision)
         initial = repo.apply_story_assessment(StoryAssessment(revision_id=revisions[0].id,

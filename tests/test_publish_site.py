@@ -292,7 +292,7 @@ def test_shared_items_have_unique_row_anchors_and_one_document(tmp_path):
 
 
 def test_real_story_publication_discloses_pending_contribution(tmp_path):
-    from paperflow_domain import ContentRevision, Item
+    from paperflow_domain import ContentRevision
     from paperflow_story_models import Story, StoryAssessment, StoryFinding
 
     storage = _storage(tmp_path)
