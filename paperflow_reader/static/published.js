@@ -23,7 +23,7 @@
         row.hidden = !visible;
         if (visible) count++;
       }
-      filters.querySelector('#filtered-count').textContent = count === 1 ? '1 story' : count + ' stories';
+      filters.querySelector('#filtered-count').textContent = count === 1 ? '1 source' : count + ' sources';
     }
     filters.addEventListener('change', () => {
       const url = new URL(location.href);
@@ -33,13 +33,17 @@
         url.searchParams.set(channel.value.slice(0, separator), channel.value.slice(separator + 1));
       }
       if (kind.value) url.searchParams.set('kind', kind.value);
-      url.hash = '';
+      url.hash = 'source-feed';
       try { history.pushState(null, '', url); } catch { location.assign(url.href); return; }
       apply();
     });
     window.addEventListener('popstate', apply);
     apply();
     filters.hidden = false;
+    const params = new URLSearchParams(location.search);
+    if (!location.hash && ['channel', 'topic', 'kind'].some(key => params.has(key))) {
+      document.getElementById('source-feed').scrollIntoView();
+    }
   }
   const snapshot = document.querySelector('#publication-status time');
   if (snapshot && Date.now() - Date.parse(snapshot.dateTime) > 24 * 60 * 60 * 1000) {

@@ -75,7 +75,12 @@ running a separate scheduled exporter into the service-managed releases tree.
 
 ## Stories and source disclosure
 
-Published stories appear once in Latest, ordered by their last material update.
+The edition opens with up to three stories, ordered by their last material update.
+Threads of study follow the lead stories, then the remaining stories and the
+source feed. When no stories qualify, the edition opens with the available
+threads or sources. Select a thread question to read its contributions in order
+and expand the supporting passages. A story account links to a thread when
+they share a public source revision in this edition.
 Open **Sources** to inspect all attached sources, their assessed contributions,
 evidence basis, and any supporting passages or missing evidence. An assessment
 of an older revision is marked; an account awaiting material updates is also
@@ -143,9 +148,8 @@ Request a bounded curation cycle there or inspect and operate individual feeds.
 The build receipt describes local generation. The publication consumer verifies
 and promotes the release independently.
 
-Use **Topic or source** and **Type** above the public feed to narrow an edition.
-Choose **Papers** to read papers across sources. A curated story matches when
-one of its selected sources meets both filters. The URL retains the selection
+Use **Browse sources**, then **Topic or source** and **Type** to narrow the source feed.
+Choose **Papers** to read papers across sources. A matching source links to any published story it contributes to. The URL retains the selection
 for bookmarks, reloads and browser history. Filtering works within a downloaded
 edition without a connection. With JavaScript disabled the complete edition
 remains readable.
