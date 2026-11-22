@@ -472,7 +472,9 @@ def test_curator_builds_study_across_independent_story_decisions(tmp_path, monke
     assert manifest['total_study_threads'] == 1 and manifest['total_stories'] == 0
     page = (tmp_path/'site/index.html').read_text()
     thread = page.split('<section id="study-threads">')[1].split('</section>')[0]
-    assert question in thread and '<summary>2 readings</summary>' in thread
+    assert question in thread and '2 readings' in thread
+    assert '<h1>Threads of study</h1>' in thread
+    thread = page.split('<ol class="thread-readings">')[1].split('</ol>')[0]
     assert thread.index(rev.markdown) < thread.index(other_rev.markdown)
     assert 'Compare &lt;benchmark&gt;' in thread and 'href="https://example.org/scale"' in thread
     with storage.transaction(write=True) as repo:

@@ -67,7 +67,7 @@ def test_site_renders_channels_with_decay_and_manifest(tmp_path: Path) -> None:
     assert "<style>" + stylesheet + "</style>" in page
     assert '<link rel="stylesheet"' not in page
     assert '<main id="main" class="shell py-8" tabindex="-1">' in page
-    assert page.count('<h1>Latest Stories</h1>') == 1
+    assert page.count('<h1>Source feed</h1>') == 1
     assert '<summary>How stories are selected</summary>' in page
     assert 'up to 2 recent items per source from the past 7 days' in page
     assert '<a class="skip" href="#main">' in page
@@ -306,8 +306,9 @@ def test_real_story_publication_discloses_pending_contribution(tmp_path):
         repo.mark_public_revision(revision.id)
         initial = repo.apply_story_assessment(StoryAssessment(revision_id=revision.id, outcome='new_story',
             evidence_basis='full_text', creator='editor', rule_set_version='v1', findings=(
-                StoryFinding(rule_id='initial', rule_version='v1', result='matched', rationale='Original evidence', passages=('Original finding',)),)), story)
-        published = repo.publish_story(story.id, 1, 'Finding', '# Finding\n\nOriginal account', [initial.id])
+                StoryFinding(rule_id='initial', rule_version='v1', result='matched', rationale='Original evidence', passages=('Original finding',)),)), story,
+            study_reading=('What changes the measurement?', 'The first measurement sets the baseline.', revision.markdown))
+        published = repo.publish_story(story.id, 1, 'Finding', '# Finding\n\nOriginal account. A second sentence gives the details.', [initial.id])
         revised = repo.add(ContentRevision.from_markdown(item_id=second.id, markdown='Corrected measurement'))
         repo.mark_public_revision(revised.id)
         repo.apply_story_assessment(StoryAssessment(revision_id=revised.id, outcome='material_contribution',
@@ -317,6 +318,8 @@ def test_real_story_publication_discloses_pending_contribution(tmp_path):
     out = tmp_path / 'site'
     build_site_from_storage(storage, out)
     page = (out / 'index.html').read_text()
+    assert page.index('<section id="stories">') < page.index('<section id="study-threads">') < page.index('<section id="source-feed">')
+    assert 'A second sentence' not in page.split('<section id="stories">')[1].split('</section>')[0]
     assert page.count(f'id="story-{story.id}"') == 1
     assert '<div class="curation-body"><div class="card-actions"><div class="card-rating"' in page
     assert 'awaiting an update for new material' in page
@@ -420,6 +423,7 @@ def test_story_order_uses_material_change_not_repeat_arrival(tmp_path, monkeypat
     storage = _storage(tmp_path)
     _seed(storage, [_batch('public', 'https://example.org/feed', [
         ('First source', now - timedelta(hours=5)), ('Newer source', now - timedelta(hours=4)),
+        ('Earlier study', now - timedelta(hours=6)), ('First report', now - timedelta(hours=7)),
         ('Late repeat', now - timedelta(minutes=5))])])
     with storage.transaction(write=True) as repo:
         items = {item.title: item for item in repo.items(channel='public')}
@@ -432,6 +436,11 @@ def test_story_order_uses_material_change_not_repeat_arrival(tmp_path, monkeypat
             a = repo.apply_story_assessment(StoryAssessment(revision_id=revisions[name].id,
                 outcome='new_story', evidence_basis='full_text', creator='editor', rule_set_version='1'), story)
             return repo.publish_story(story.id, 1, title, title + ' summary', [a.id])
+        FrozenDatetime.clock = now - timedelta(hours=5)
+        first('First report', 'Fourth story')
+        FrozenDatetime.clock = now - timedelta(hours=4)
+        first('Earlier study', 'Third story')
+        FrozenDatetime.clock = now - timedelta(hours=3)
         older = first('First source', 'Older material story')
         FrozenDatetime.clock = now - timedelta(hours=1)
         first('Newer source', 'Newer material story')
@@ -440,7 +449,10 @@ def test_story_order_uses_material_change_not_repeat_arrival(tmp_path, monkeypat
             evidence_basis='full_text', creator='editor', rule_set_version='1'))
     build_site_from_storage(storage, tmp_path / 'site', now=now)
     page = (tmp_path / 'site' / 'index.html').read_text()
-    assert page.index('Newer material story') < page.index('Older material story')
+    lead = page.split('<section id="stories">')[1].split('</section>')[0]
+    assert lead.index('Newer material story') < lead.index('Older material story') < lead.index('Third story')
+    assert 'Fourth story' not in lead
+    assert page.index('<h2>More stories</h2>') < page.index('Fourth story') < page.index('<section id="source-feed">')
 
 
 def test_published_markdown_renders_prose_without_executable_html():

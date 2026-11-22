@@ -54,6 +54,9 @@ test('story account is readable, navigable, and safe across viewport sizes', asy
     const account = page.getByRole('region', {name: 'Story and curation'});
     await expect(account).toBeVisible();
     await expect(account.locator('.document-prose')).toContainText('Original account');
+    await account.getByText('Sources (2)', {exact:true}).click();
+    await expect(account.getByRole('link', {name:'Primary source'})).toHaveAttribute('href','https://example.org/feed/0');
+    await account.getByText('Sources (2)', {exact:true}).click();
     await expect(account.locator('pre')).toHaveCount(0);
     expect(await account.locator('.document-prose').evaluate(el => el.getBoundingClientRect().top)).toBeLessThan((await page.evaluate(() => innerHeight)) - 120);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
@@ -69,6 +72,24 @@ test('story account is readable, navigable, and safe across viewport sizes', asy
     await page.keyboard.press('Space');
     await expect(story.locator('.curation-body')).toBeHidden();
   }
+  await page.getByRole('link', {name:'Finding', exact:true}).first().click();
+  const account = page.getByRole('region', {name:'Story and curation'});
+  const question = 'What changes the measurement?';
+  await account.getByRole('link', {name:question}).click();
+  const thread = page.getByRole('region', {name:question});
+  await expect(thread).toContainText('The first measurement sets the baseline.');
+  await expect(thread.locator('blockquote')).toBeHidden();
+  await thread.getByText('Supporting passage').click();
+  await expect(thread.locator('blockquote')).toHaveText('Original finding');
+  await page.reload();
+  await expect(thread).toBeVisible();
+  await thread.getByRole('link', {name:'Back to thread question'}).click();
+  await expect(page.locator('#study-threads a')).toBeFocused();
+  await page.getByRole('navigation', {name:'Edition'}).getByRole('link', {name:'Browse sources'}).click();
+  const feed = page.locator('#source-feed');
+  await expect(feed.locator('article')).toHaveCount(2);
+  await feed.getByRole('link', {name:'Finding', exact:true}).first().click();
+  await expect(account).toBeVisible();
 });
 
 
