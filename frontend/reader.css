@@ -337,4 +337,23 @@ button,.control,nav a,.brand { max-width:100%; overflow-wrap:anywhere; white-spa
 .published-page .curation-document:focus-visible > .document-back { outline:3px solid var(--accent); outline-offset:3px; }
 @media(max-width:600px) {
   .published-page .topbar { flex-wrap:wrap; gap:0 1rem; }
+  .published-page .card-actions:has(> .card-rating) {
+    display:grid;
+    grid-template-columns:repeat(3,minmax(0,1fr));
+    gap:0 .5rem;
+    align-items:stretch;
+  }
+  .published-page .card-rating {
+    display:grid;
+    grid-area:1 / 1 / span 3 / span 2;
+    grid-template-columns:subgrid;
+    grid-template-rows:subgrid;
+    align-items:stretch;
+    gap:0 .5rem;
+  }
+  .published-page .card-rating > span { grid-column:1 / -1; }
+  .published-page .card-rating > span:first-child { margin-bottom:.5rem; }
+  .published-page .rating-status:not(:empty) { padding-top:.5rem; }
+  .published-page .card-rating + .card-close { grid-area:2 / 3; margin:0; }
+  .published-page .card-actions button { padding-inline:.25rem; }
 }

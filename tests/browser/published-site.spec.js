@@ -77,6 +77,16 @@ test('story account is readable, navigable, and safe across viewport sizes', asy
     await expect(account.locator('.document-back')).toBeFocused();
     expect(await account.evaluate(el => getComputedStyle(el).outlineStyle)).toBe('none');
     await expect(nav).toBeInViewport();
+    if (width <= 600) {
+      const buttons = account.locator('.card-actions button');
+      await expect(buttons).toHaveCount(3);
+      const boxes = await buttons.evaluateAll(elements => elements.map(element => element.getBoundingClientRect().toJSON()));
+      for (const box of boxes) {
+        expect(Math.abs(box.top - boxes[0].top)).toBeLessThan(1);
+        expect(Math.abs(box.width - boxes[0].width)).toBeLessThan(1);
+        expect(box.height).toBeGreaterThanOrEqual(44);
+      }
+    }
     await expect(account.locator('.document-prose')).toContainText('Original account');
     await account.getByText('Sources (2)', {exact:true}).click();
     await expect(account.getByRole('link', {name:'Primary source'})).toHaveAttribute('href','https://example.org/feed/0');
